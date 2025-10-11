@@ -54,10 +54,12 @@ add_library(openfhe_numpy_cpp STATIC
     ${OpenFHE_Numpy_INCLUDES}/numpy_enc_matrix.h
     ${OpenFHE_Numpy_INCLUDES}/numpy_helper_functions.h
     ${OpenFHE_Numpy_INCLUDES}/numpy_utils.h
+    ${OpenFHE_Numpy_INCLUDES}/conv_helper_function.h
     ${OpenFHE_Numpy_SOURCE}/numpy_array_metadata.cpp
     ${OpenFHE_Numpy_SOURCE}/numpy_enc_matrix.cpp
     ${OpenFHE_Numpy_SOURCE}/numpy_helper_functions.cpp
     ${OpenFHE_Numpy_SOURCE}/numpy_utils.cpp
+    ${OpenFHE_Numpy_SOURCE}/conv_helper_function.cpp
 )
 pybind11_add_module(openfhe_numpy ${OpenFHE_Numpy_SOURCE}/numpy_bindings.cpp)
 # The next line ensures that the installed openfhe module can find its shared library dependencies
