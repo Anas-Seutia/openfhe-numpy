@@ -1,18 +1,234 @@
 #include "conv_helper_function.h"
+#include "numpy_utils.h"
+#include "utils/exception.h"
 
 #include <algorithm>
 #include <iostream>
 #include <cmath>
-#include <map> 
+#include <map>
 
-std::vector<std::vector<double>> ConstructConv2DToeplitz(
-    const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel,
-    const uint32_t &in_channels,  
-    const uint32_t &out_channels, 
+template <typename T>
+std::map<uint32_t, std::vector<T>> PackMatDiagWise(
+    const std::vector<std::vector<T>> &matrix,
+    const std::size_t &num_slots) {
+        
+    std::cout << "\n=== Diagonalizing Matrix ===" << std::endl;
+    
+    // Check input parameters
+    uint32_t matrix_height = matrix.size();
+    uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
+    
+    std::map<uint32_t, std::vector<T>> diagonals;
+    
+    if (!lbcrypto::IsPowerOfTwo(num_slots)) {
+        OPENFHE_THROW("NumSlots must be a power of two");
+    }
+    
+    // Check size constraints
+    if (num_slots < matrix_height * matrix_width) {
+        OPENFHE_THROW("size is bigger than total slots");
+    }
+    
+    if (matrix_height == 1) {
+        std::map<uint32_t, std::vector<T>> vector;
+        vector[0] = matrix[0];
+        return vector;
+    }
+    
+    for (uint32_t diag_idx = 0; diag_idx < matrix_width; ++diag_idx) {
+        std::vector<T> diagonal(num_slots, 0.0);
+        bool is_nonzero = false;
+        
+        // Extract diagonal values
+        for (uint32_t n = 0; n < matrix_height; ++n) {
+            // Compute row and column indices with wrapping
+            uint32_t row = n;
+            uint32_t col = (diag_idx + n) % matrix_width;
+            
+            if (row < matrix_height && col < matrix_width) {
+                diagonal[n] = matrix[row][col];
+                if (std::abs(diagonal[n]) > 1e-10) {
+                    is_nonzero = true;
+                }
+            }
+        }
+        
+        // Only store non-zero diagonals
+        if (is_nonzero) {
+            diagonals[diag_idx] = diagonal;
+        }
+    }
+
+    return diagonals;
+}
+template std::map<uint32_t, std::vector<double>> PackMatDiagWise(const std::vector<std::vector<double>> &matrix, const std::size_t &num_slots);
+
+template <typename T>
+DiagonalResult<T> PackBlockMatDiagWise(
+    std::vector<std::vector<T>> matrix,
+    const std::size_t &block_width,
+    const std::string& embed_method,
+    const std::size_t &num_slots) {
+        
+    std::cout << "\n=== Diagonalizing Matrix ===" << std::endl;
+    
+    // Check input parameters
+    uint32_t matrix_height = matrix.size();
+    uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
+    
+    DiagonalResult<T> result;
+    
+    // Check power of two constraints
+    if (!lbcrypto::IsPowerOfTwo(block_width)) {
+        OPENFHE_THROW("BlockSize must be a power of two");
+    }
+    
+    if (!lbcrypto::IsPowerOfTwo(num_slots)) {
+        OPENFHE_THROW("NumSlots must be a power of two");
+    }
+    
+    // Check size constraints
+    if (num_slots < matrix_height * matrix_width) {
+        OPENFHE_THROW("size is bigger than total slots");
+    }
+    
+    if (matrix_height == 1) {
+        if (num_slots / block_width > 1) {
+            OPENFHE_THROW("vector is too long, can't duplicate");
+        }
+        result.diagonals_by_block[{0,0}][0] = matrix[0];
+        result.output_rotations = 0;
+        return result;
+    }
+    
+    if (num_slots % (block_width * block_width) != 0) {
+        OPENFHE_THROW("num_slots % block_size must equal 0");
+    }
+    
+    uint32_t num_block_rows = std::ceil((double)matrix_height / block_width);
+    uint32_t num_block_cols = std::ceil((double)matrix_width / block_width);
+    
+    
+    // Determine block height and output rotations
+    uint32_t block_height;
+    if (num_block_rows == 1 && embed_method == "hybrid") {
+        block_height = NextPow2(matrix_height);
+        result.output_rotations = static_cast<uint32_t>(std::log2(block_width / block_height));
+    } else {
+        block_height = block_width;
+        result.output_rotations = 0;
+    }
+
+    // Inflate dimensions of the matrix (resize)
+    uint32_t new_height = num_block_rows * block_height;
+    uint32_t new_width = num_block_cols * block_width;
+
+    // Copy original matrix data
+    std::vector<std::vector<T>> resized_matrix(new_height, std::vector<T>(new_width, 0.0));
+    if (new_height > matrix_height || new_width > matrix_width) {
+        for (uint32_t i = 0; i < matrix_height; ++i) {
+            for (uint32_t j = 0; j < matrix_width; ++j) {
+                resized_matrix[i][j] = matrix[i][j];
+            }
+        }
+        matrix = std::move(resized_matrix);
+    }
+
+
+    // Process each block
+    uint32_t total_diagonals = 0;
+
+    for (uint32_t block_row = 0; block_row < num_block_rows; ++block_row) {
+        for (uint32_t block_col = 0; block_col < num_block_cols; ++block_col) {
+            uint32_t row_start = block_height * block_row;
+            uint32_t col_start = block_width * block_col;
+            
+            // Extract a block from the matrix
+            std::vector<std::vector<T>> block(block_height, std::vector<T>(block_width, 0.0));
+            for (uint32_t i = 0; i < block_height; ++i) {
+                for (uint32_t j = 0; j < block_width; ++j) {
+                    uint32_t row = row_start + i;
+                    uint32_t col = col_start + j;
+                    
+                    if (row < matrix.size() && col < matrix[0].size()) {
+                        block[i][j] = matrix[row][col];
+                    }
+                }
+            }
+            
+            
+            // Extract generalized diagonals from a block (row)
+            std::vector<uint32_t> row_idx;
+            uint32_t repeat_count = block_width / block_height;
+            for (uint32_t rep = 0; rep < repeat_count; ++rep) {
+                for (uint32_t i = 0; i < block_height; ++i) {
+                    row_idx.push_back(i);
+                }
+            }
+            
+            // Extract generalized diagonals from a block (col)
+            std::vector<std::vector<uint32_t>> col_idx(block_height, std::vector<uint32_t>(block_width));
+            for (uint32_t i = 0; i < block_height; ++i) {
+                for (uint32_t j = 0; j < block_width; ++j) {
+                    uint32_t idx = i + j;
+                    col_idx[i][j] = (idx >= block_width) ? (idx - block_width) : idx;
+                }
+            }
+            
+            // Extract diagonals using the computed indices
+            std::vector<std::vector<T>> block_diagonals(block_height, std::vector<T>(block_width));
+            for (uint32_t i = 0; i < block_height; ++i) {
+                for (uint32_t j = 0; j < block_width; ++j) {
+                    uint32_t row = row_idx[j];
+                    uint32_t col = col_idx[i][j];
+                    
+                    if (row < block.size() && col < block[0].size()) {
+                        block_diagonals[i][j] = block[row][col];
+                    } else {
+                        block_diagonals[i][j] = 0.0;
+                    }
+                }
+            }
+            
+            // Collect non-zero diagonals
+            std::map<uint32_t, std::vector<T>> nonzero_diagonals;
+            for (uint32_t i = 0; i < block_height; ++i) {
+                bool is_nonzero = false;
+                for (uint32_t j = 0; j < block_width; ++j) {
+                    if (std::abs(block_diagonals[i][j]) > 1e-10) {
+                        is_nonzero = true;
+                        break;
+                    }
+                }
+                
+                if (is_nonzero) {
+                    nonzero_diagonals[i] = block_diagonals[i];
+                }
+            }
+            
+            // If no non-zero diagonals, add a zero diagonal
+            if (nonzero_diagonals.empty()) {
+                nonzero_diagonals[0] = std::vector<T>(block_width, 0.0);
+            }
+            
+            total_diagonals += nonzero_diagonals.size();
+            
+            // Store in result
+            for (const auto& i : nonzero_diagonals) {
+                result.diagonals_by_block[{block_row, block_col}][i.first] = i.second;
+            }
+        }
+    }
+
+    return result;
+}
+template DiagonalResult<double> PackBlockMatDiagWise(std::vector<std::vector<double>> matrix, const std::size_t &block_size, const std::string& embed_method, const std::size_t &num_slots);
+
+template <typename T>
+std::vector<std::vector<T>> ConstructConv2DToeplitz(
+    const std::vector<std::vector<std::vector<std::vector<T>>>>& kernel,
     const uint32_t &input_height, 
     const uint32_t &input_width,  
-    const uint32_t &kernel_height,
-    const uint32_t &kernel_width, 
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
@@ -21,6 +237,11 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
     const uint32_t &output_gap) {
     
     std::cout << "\n=== Constructing Toeplitz Matrix ===" << std::endl;
+
+    const uint32_t out_channels = kernel.size();
+    const uint32_t in_channels = kernel[0].size();
+    const uint32_t kernel_height = kernel[0][0].size();
+    const uint32_t kernel_width = kernel[0][0][0].size();
     
     // Compute output dimensions after convolution
     uint32_t output_height, output_width;
@@ -58,7 +279,7 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
     std::cout << "Toeplitz matrix dimensions: " << n_rows << " x " << n_cols << std::endl;
     
     // Using map for sparse representation (row -> col -> value)
-    std::map<uint32_t, std::map<uint32_t, double>> sparse_matrix;
+    std::map<uint32_t, std::map<uint32_t, T>> sparse_matrix;
     
     // Create index grid for the padded input image
     std::vector<std::vector<std::vector<uint32_t>>> valid_image_indices(ctx_input_channel);
@@ -78,9 +299,9 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
     uint32_t padded_out_channels = ctx_output_channel * output_gap * output_gap;
     uint32_t padded_in_channels = ctx_input_channel * input_gap * input_gap;
     
-    std::vector<std::vector<double>> padded_kernel(
+    std::vector<std::vector<T>> padded_kernel(
         padded_out_channels,
-        std::vector<double>(padded_in_channels * kernel_height * kernel_width, 0.0)
+        std::vector<T>(padded_in_channels * kernel_height * kernel_width, 0.0)
     );
     
     // Copy kernel values
@@ -174,7 +395,7 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
                 
                 for (size_t k = 0; k < initial_kernel_position.size(); ++k) {
                     uint32_t col = initial_kernel_position[k] + start_idx;
-                    double value = padded_kernel[co * output_gap * output_gap + j][k];
+                    T value = padded_kernel[co * output_gap * output_gap + j][k];
                     
                     if (std::abs(value) > 1e-10) {  // Only store non-zero values
                         sparse_matrix[row][col] = value;
@@ -199,7 +420,7 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
     // Build final dense matrix with unpadded columns
     uint32_t final_n_cols = ctx_input_channel * input_height * input_gap * 
                             input_width * input_gap;
-    std::vector<std::vector<double>> toeplitz(n_rows, std::vector<double>(final_n_cols, 0.0));
+    std::vector<std::vector<T>> toeplitz(n_rows, std::vector<T>(final_n_cols, 0.0));
     
     std::cout << "Converting to dense matrix..." << std::endl;
     
@@ -207,7 +428,7 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
         uint32_t row = row_entry.first;
         for (const auto& col_entry : row_entry.second) {
             uint32_t original_col = col_entry.first;
-            double value = col_entry.second;
+            T value = col_entry.second;
             
             // Find new column index in unpadded matrix
             auto it = std::find(image_indices_flat.begin(), image_indices_flat.end(), original_col);
@@ -224,3 +445,13 @@ std::vector<std::vector<double>> ConstructConv2DToeplitz(
     
     return toeplitz;
 }
+template std::vector<std::vector<double>> ConstructConv2DToeplitz(
+    const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel,
+    const uint32_t &input_height,
+    const uint32_t &input_width,
+    const uint32_t &stride,
+    const uint32_t &padding,
+    const uint32_t &dilation,
+    const uint32_t &batch_size,
+    const uint32_t &input_gap,
+    const uint32_t &output_gap);

@@ -135,20 +135,10 @@ void MatrixVectorProduct_CRC(std::vector<std::vector<double>> inputMatrix, std::
     std::cout << "Matrix-Vector Demo Complete.\n";
 }
 
-/**
- * @brief Demonstrate matrix-vector multiplication using CRC encoding
- * 
- * @param inputKernel 2D cleartext Kernel
- * @return std::vector<std::vector<double>> 2D Toeplitz packed matrix
- */
 std::vector<std::vector<double>> ToeplitzConv_Packing(
     const std::vector<std::vector<std::vector<std::vector<double>>>>& inputKernel,
-    const uint32_t &in_channels,
-    const uint32_t &out_channels,
     const uint32_t &input_height,
     const uint32_t &input_width,
-    const uint32_t &kernel_height,
-    const uint32_t &kernel_width,
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
@@ -158,12 +148,31 @@ std::vector<std::vector<double>> ToeplitzConv_Packing(
 ) {
     std::cout << "=== DEMO: Conv. pt1 with Toeplitz Convolution Packing ===" << std::endl;
 
-    const std::vector<std::vector<double>> toeplitz = ConstructConv2DToeplitz(inputKernel, in_channels, out_channels, input_height, input_width, kernel_height, kernel_width, stride, padding, dilation, batch_size, input_gap, output_gap);
+    const std::vector<std::vector<double>> toeplitz = ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap);
     PrintMatrix(toeplitz);
     return toeplitz;
 }
 
+std::map<uint32_t, std::vector<double>> DiagonalConv_Packing(
+    const std::vector<std::vector<double>> matrix,
+    const std::size_t &num_slots
+) {
+    std::cout << "=== DEMO: Conv. pt2 with Diagonal Packing ===" << std::endl;
 
+    const std::map<uint32_t, std::vector<double>> diagonalized = PackMatDiagWise(matrix, num_slots);
+    for (const auto& diag_entry : diagonalized) {
+        uint32_t diag_idx = diag_entry.first;
+        const auto& values = diag_entry.second;
+        
+        std::cout << "  Diagonal " << diag_idx << " (first 10 values): [";
+        for (size_t i = 0; i < std::min(size_t(64), values.size()); ++i) {
+            std::cout << std::fixed << std::setprecision(2) << values[i];
+            if (i < std::min(size_t(64), values.size()) - 1) std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+    }
+    return diagonalized;
+}
 
 /**
  * @brief Main function
@@ -191,12 +200,8 @@ int main(int argc, char* argv[]) {
                                         2,  5,  0,  2,  8,  8,  5,  9,
                                         5,  1,  10, 6,  2,  8,  6,  3};
 
-    uint32_t in_channels = 1;
-    uint32_t out_channels = 1;
     uint32_t input_height = 8;
     uint32_t input_width = 8;
-    uint32_t kernel_height = 3;
-    uint32_t kernel_width = 3;
     uint32_t stride = 1;
     uint32_t padding = 0;
     uint32_t dilation = 1;
@@ -219,18 +224,22 @@ int main(int argc, char* argv[]) {
         std::cout << "OpenFHE Matrix Operations Demo\n"
                   << "-------------------------------\n"
                   << "1. Toeplitz Packing Only\n"
-                  << "2. Full Convolution\n"
+                  << "2. Toeplitz + Diagonalize Packing\n"
+                  << "3. Full Convolution\n"
                   << "Enter choice (default=1): ";
         std::cin >> choice;
     }
 
     switch (choice) {
         case 2:
-            MatrixVectorProduct_CRC(ToeplitzConv_Packing(inputkernel, in_channels, out_channels, input_height, input_width, kernel_height, kernel_width, stride, padding, dilation, batch_size, input_gap, output_gap), inputMatrix);
+            DiagonalConv_Packing(ToeplitzConv_Packing(inputkernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), 4096);
+            break;
+        case 3:
+            MatrixVectorProduct_CRC(ToeplitzConv_Packing(inputkernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), inputMatrix);
             break;
         case 1:
         default:
-            ToeplitzConv_Packing(inputkernel, in_channels, out_channels, input_height, input_width, kernel_height, kernel_width, stride, padding, dilation, batch_size, input_gap, output_gap);
+            ToeplitzConv_Packing(inputkernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap);
             break;
     }
 
