@@ -42,6 +42,7 @@ void PrintMatrix(const std::vector<std::vector<Element>>& mat) {
         std::cout << std::endl;
     }
 };
+template void PrintMatrix(const std::vector<std::vector<int>>& mat);
 template void PrintMatrix(const std::vector<std::vector<double>>& mat);
 template void PrintMatrix(const std::vector<std::vector<DCRTPoly>>& mat);
 
@@ -52,6 +53,7 @@ void PrintVector(const std::vector<Element>& vec) {
         std::cout << val << " ";
     std::cout << std::endl;
 };
+template void PrintVector(const std::vector<int32_t>& vec);
 template void PrintVector(const std::vector<double>& vec);
 template void PrintVector(const std::vector<DCRTPoly>& vec);
 
@@ -263,5 +265,6 @@ void print_range(const std::vector<Element>& v, std::size_t start, std::size_t e
         std::cout << v[i] << (i + 1 < end ? ' ' : '\n');
     }
 }
+template void print_range(const std::vector<int>& v, std::size_t start, std::size_t end);
 template void print_range(const std::vector<double>& v, std::size_t start, std::size_t end);
 template void print_range(const std::vector<DCRTPoly>& v, std::size_t start, std::size_t end);
