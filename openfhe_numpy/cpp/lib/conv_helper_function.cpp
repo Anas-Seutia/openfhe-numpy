@@ -2,13 +2,14 @@
 #include "numpy_utils.h"
 #include "utils/exception.h"
 
+#include <openfhe.h>
 #include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <map>
 
 template <typename T>
-std::map<uint32_t, std::vector<T>> PackMatDiagWise(
+std::vector<std::vector<T>> PackMatDiagWise(
     const std::vector<std::vector<T>> &matrix,
     const std::size_t &num_slots) {
         
@@ -18,26 +19,24 @@ std::map<uint32_t, std::vector<T>> PackMatDiagWise(
     uint32_t matrix_height = matrix.size();
     uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
     
-    std::map<uint32_t, std::vector<T>> diagonals;
+    std::vector<std::vector<T>> diagonals;
     
-    if (!lbcrypto::IsPowerOfTwo(num_slots)) {
+    if (!IsPowerOfTwo(num_slots)) {
         OPENFHE_THROW("NumSlots must be a power of two");
     }
     
     // Check size constraints
-    if (num_slots < matrix_height * matrix_width) {
+    if (num_slots < matrix_width) {
         OPENFHE_THROW("size is bigger than total slots");
     }
     
     if (matrix_height == 1) {
-        std::map<uint32_t, std::vector<T>> vector;
-        vector[0] = matrix[0];
+        std::vector<std::vector<T>> vector = {matrix[0]};
         return vector;
     }
     
     for (uint32_t diag_idx = 0; diag_idx < matrix_width; ++diag_idx) {
         std::vector<T> diagonal(num_slots, 0.0);
-        bool is_nonzero = false;
         
         // Extract diagonal values
         for (uint32_t n = 0; n < matrix_height; ++n) {
@@ -47,21 +46,38 @@ std::map<uint32_t, std::vector<T>> PackMatDiagWise(
             
             if (row < matrix_height && col < matrix_width) {
                 diagonal[n] = matrix[row][col];
-                if (std::abs(diagonal[n]) > 1e-10) {
-                    is_nonzero = true;
-                }
             }
         }
         
-        // Only store non-zero diagonals
-        if (is_nonzero) {
-            diagonals[diag_idx] = diagonal;
-        }
+        diagonals.push_back(diagonal);
     }
 
     return diagonals;
 }
-template std::map<uint32_t, std::vector<double>> PackMatDiagWise(const std::vector<std::vector<double>> &matrix, const std::size_t &num_slots);
+template std::vector<std::vector<double>> PackMatDiagWise(const std::vector<std::vector<double>> &matrix, const std::size_t &num_slots);
+
+std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix) {
+    // Check input parameters
+    
+    uint32_t matrix_height = matrix.size();
+    uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
+    std::vector<int32_t> rotations;
+    
+    for (uint32_t diag_idx = 0; diag_idx < matrix_height; ++diag_idx) {
+        bool is_nonzero = false;
+        for (uint32_t n = 0; n < matrix_width; ++n) {
+            if (std::abs(matrix[diag_idx][n]) > 1e-10) {
+                is_nonzero = true;
+                break;
+            }
+        }
+        // Only store non-zero diagonals
+        if (is_nonzero) {
+            rotations.push_back(diag_idx);
+        }
+    }
+    return rotations;
+}
 
 template <typename T>
 DiagonalResult<T> PackBlockMatDiagWise(
@@ -79,11 +95,11 @@ DiagonalResult<T> PackBlockMatDiagWise(
     DiagonalResult<T> result;
     
     // Check power of two constraints
-    if (!lbcrypto::IsPowerOfTwo(block_width)) {
+    if (!IsPowerOfTwo(block_width)) {
         OPENFHE_THROW("BlockSize must be a power of two");
     }
     
-    if (!lbcrypto::IsPowerOfTwo(num_slots)) {
+    if (!IsPowerOfTwo(num_slots)) {
         OPENFHE_THROW("NumSlots must be a power of two");
     }
     
@@ -373,7 +389,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     std::vector<uint32_t> corner_indices;  
     for (uint32_t h = 0; h < output_height * output_gap; h += output_gap) {
         for (uint32_t w = 0; w < output_width * output_gap; w += output_gap) {
-            corner_indices.push_back(valid_image_indices[0][h][w]);
+            corner_indices.push_back(valid_image_indices[0][h*stride][w*stride]);
         }
     }
     
@@ -455,3 +471,50 @@ template std::vector<std::vector<double>> ConstructConv2DToeplitz(
     const uint32_t &batch_size,
     const uint32_t &input_gap,
     const uint32_t &output_gap);
+
+template <typename T>
+Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
+                                        const std::vector<T>& diagonals,
+                                        std::vector<int32_t>& rotations) { 
+
+    if (rotations.empty()) {
+        for (int32_t k = 0; k < diagonals.size(); ++k) {
+            rotations.push_back(k);
+        }
+    }
+
+    Ciphertext<DCRTPoly> ctResult;
+    auto cryptoContext = ctVector->GetCryptoContext();
+    bool first = true;
+
+    for (const int32_t rotation : rotations) {        
+        auto ctRotated = cryptoContext->EvalRotate(ctVector, static_cast<int32_t>(rotation));
+        auto ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+        if (first) {
+            ctResult = ctProduct;
+            first = false;
+        } else {
+            cryptoContext->EvalAddInPlace(ctResult, ctProduct);
+        }
+    }
+
+    return ctResult;
+}
+template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Ciphertext<DCRTPoly>>& diagonals, std::vector<int32_t>& rotations);
+template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Plaintext>& diagonals, std::vector<int32_t>& rotations);
+
+std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors) {
+    std::vector<Plaintext> ctVectors;
+    for (uint32_t i = 0; i < vectors.size(); i++) {
+        ctVectors.push_back(cc->MakeCKKSPackedPlaintext(vectors[i]));
+    }
+    return ctVectors;
+}
+
+std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& vectors) {
+    std::vector<Ciphertext<DCRTPoly>> ctVectors;
+    for (uint32_t i = 0; i < vectors.size(); i++) {
+        ctVectors.push_back(cc->Encrypt(publicKey, vectors[i]));
+    }
+    return ctVectors;
+}
