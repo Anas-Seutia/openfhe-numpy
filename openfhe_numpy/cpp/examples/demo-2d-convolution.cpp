@@ -115,8 +115,6 @@ std::vector<std::vector<double>> DiagonalConv_Packing(
     const std::vector<std::vector<double>> matrix,
     const std::size_t &num_slots
 ) {
-    std::cout << "=== DEMO: Conv. pt2 with Diagonal Packing ===" << std::endl;
-
     std::vector<std::vector<double>> diagonalized = PackMatDiagWise(matrix, num_slots);
     std::vector<int32_t> nonZeroDiagonals = getOptimalRots(diagonalized);
 
@@ -172,10 +170,10 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     // Generate rotation keys for all diagonal indices
     std::vector<int32_t> rotationIndices = getOptimalRots(diagonals);
     cc->EvalRotateKeyGen(keyPair.secretKey, rotationIndices);
-
+    
     double time_keygen = TOC(t_keygen);
     std::cout << "Key generation time: " << time_keygen << " ms" << std::endl;
-
+    
     
     std::cout << "Encrypting input vector and diagonals...\n";
     TimeVar t_encrypt;
@@ -186,7 +184,7 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
     double time_encrypt = TOC(t_encrypt);
     std::cout << "Encryption time: " << time_encrypt << " ms" << std::endl;
-
+    
     std::cout << "\n--- Plaintext Matrix-Vector Product ---\n";
     PrintVector(MulMatVec(inputMatrix, inputVector));
 
@@ -232,15 +230,6 @@ int main(int argc, char* argv[]) {
             }
         }
     };
-
-    std::vector<double> inputMatrix =  {0,  7,  8,  10, 1,  2,  7,  6,
-                                        0,  1,  1,  9,  7,  5,  1,  7,
-                                        8,  8,  4,  5,  8,  2,  6,  1,
-                                        1,  0,  0,  1,  10, 3,  1,  7,
-                                        7,  8,  2,  5,  3,  2,  10, 9,
-                                        0,  3,  4,  10, 10, 5,  2,  5,
-                                        2,  5,  0,  2,  8,  8,  5,  9,
-                                        5,  1,  10, 6,  2,  8,  6,  3};
 
     std::vector<std::vector<double>> input2DMatrix =   {{0,  7,  8,  10, 1,  2,  7,  6},
                                                         {0,  1,  1,  9,  7,  5,  1,  7},
@@ -289,8 +278,8 @@ int main(int argc, char* argv[]) {
             PrintMatrix(DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), 64));
             break;
         case 3:
-            EncodeMatrix(input2DMatrix, 64);
-            MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), inputMatrix);
+            MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));
+            std::cout << std::endl << "--- Cleartext Computation Result ---" << std::endl;
             PrintMatrix(NaiveConv2D(input2DMatrix, inputKernel, stride, padding, dilation));
             break;
     }
