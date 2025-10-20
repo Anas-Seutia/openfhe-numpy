@@ -12,8 +12,6 @@ template <typename T>
 std::vector<std::vector<T>> PackMatDiagWise(
     const std::vector<std::vector<T>> &matrix,
     const std::size_t &num_slots) {
-        
-    std::cout << "\n=== Diagonalizing Matrix ===" << std::endl;
     
     // Check input parameters
     uint32_t matrix_height = matrix.size();
@@ -85,8 +83,6 @@ DiagonalResult<T> PackBlockMatDiagWise(
     const std::size_t &block_width,
     const std::string& embed_method,
     const std::size_t &num_slots) {
-        
-    std::cout << "\n=== Diagonalizing Matrix ===" << std::endl;
     
     // Check input parameters
     uint32_t matrix_height = matrix.size();
@@ -251,8 +247,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     const uint32_t &batch_size,
     const uint32_t &input_gap,
     const uint32_t &output_gap) {
-    
-    std::cout << "\n=== Constructing Toeplitz Matrix ===" << std::endl;
 
     const uint32_t out_channels = kernel.size();
     const uint32_t in_channels = kernel[0].size();
@@ -265,22 +259,14 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
                     dilation*(kernel_height-1) - 1) / stride + 1;
     output_width = (input_width + 2*padding - 
                     dilation*(kernel_width-1) - 1) / stride + 1;
-    std::cout << "Output dimensions (output_height, output_width): (" << output_height << ", " << output_width << ")" << std::endl;
     
     // Compute FHE output dimensions with multiplexing
     uint32_t ctx_input_channel = std::ceil((double)in_channels / 
                                (input_gap * input_gap));
     uint32_t ctx_output_channel, ctx_output_height, ctx_output_width;
     ctx_output_channel = std::ceil((double)out_channels / (output_gap * output_gap));
-    ctx_output_height = std::max(input_height, output_height * output_gap);
-    ctx_output_width = std::max(input_width, output_width * output_gap);
-        
-    std::cout << "FHE input shape: (N=" << batch_size 
-              << ", Ci=" << ctx_input_channel 
-              << ", Hi=" << input_height * input_gap
-              << ", Wi=" << input_width * input_gap << ")" << std::endl;
-    std::cout << "FHE output shape: (N=" << batch_size 
-              << ", Co=" << ctx_output_channel << ", output_height=" << ctx_output_height << ", output_width=" << ctx_output_width << ")" << std::endl;
+    ctx_output_height = output_height * output_gap;
+    ctx_output_width = output_width * output_gap;
     
     // Padded input dimensions
     uint32_t input_height_padding = input_height * input_gap + 
@@ -291,8 +277,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     // Initialize Toeplitz matrix
     uint32_t n_rows = ctx_output_channel * ctx_output_height * ctx_output_width;
     uint32_t n_cols = ctx_input_channel * input_height_padding * input_width_padding;
-    
-    std::cout << "Toeplitz matrix dimensions: " << n_rows << " x " << n_cols << std::endl;
     
     // Using map for sparse representation (row -> col -> value)
     std::map<uint32_t, std::map<uint32_t, T>> sparse_matrix;
@@ -335,19 +319,21 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     
     // Compute initial kernel position (which input pixels the kernel initially touches)
     std::vector<uint32_t> initial_kernel_position;
-    
-    // Extract multiplex anchors (top-left iG x iG region)
-    for (uint32_t h = 0; h < input_gap; ++h) {
-        for (uint32_t w = 0; w < input_gap; ++w) {
-            uint32_t anchor = valid_image_indices[0][h][w];
-            
-            // For each anchor, compute all kernel offsets
-            for (uint32_t kh = 0; kh < kernel_height; ++kh) {
-                for (uint32_t kw = 0; kw < kernel_width; ++kw) {
-                    uint32_t row_idx = kh * dilation * input_gap;
-                    uint32_t col_idx = kw * dilation * input_gap;
-                    uint32_t offset = valid_image_indices[0][row_idx][col_idx];
-                    initial_kernel_position.push_back(anchor + offset);
+
+    // Extract multiplex anchors (top-left iG x iG region) from ALL input channels
+    for (uint32_t c = 0; c < ctx_input_channel; ++c) {
+        for (uint32_t h = 0; h < input_gap; ++h) {
+            for (uint32_t w = 0; w < input_gap; ++w) {
+                uint32_t anchor = valid_image_indices[c][h][w];
+
+                // For each anchor, compute all kernel offsets (using channel 0 for spatial offsets)
+                for (uint32_t kh = 0; kh < kernel_height; ++kh) {
+                    for (uint32_t kw = 0; kw < kernel_width; ++kw) {
+                        uint32_t row_idx = kh * dilation * input_gap;
+                        uint32_t col_idx = kw * dilation * input_gap;
+                        uint32_t offset = valid_image_indices[0][row_idx][col_idx];
+                        initial_kernel_position.push_back(anchor + offset);
+                    }
                 }
             }
         }
@@ -399,8 +385,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
         out_channel_offsets[co] = co * ctx_output_height * ctx_output_width;
     }
     
-    std::cout << "Populating Toeplitz matrix..." << std::endl;
-    
     // Populate the Toeplitz matrix
     for (size_t i = 0; i < corner_indices.size(); ++i) {
         uint32_t start_idx = corner_indices[i];
@@ -438,8 +422,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
                             input_width * input_gap;
     std::vector<std::vector<T>> toeplitz(n_rows, std::vector<T>(final_n_cols, 0.0));
     
-    std::cout << "Converting to dense matrix..." << std::endl;
-    
     for (const auto& row_entry : sparse_matrix) {
         uint32_t row = row_entry.first;
         for (const auto& col_entry : row_entry.second) {
@@ -454,10 +436,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             }
         }
     }
-    
-    std::cout << "Final Toeplitz matrix: " << toeplitz.size() << " x " 
-              << (toeplitz.empty() ? 0 : toeplitz[0].size()) << std::endl;
-    std::cout << "=== Toeplitz Construction Complete ===" << std::endl;
     
     return toeplitz;
 }
