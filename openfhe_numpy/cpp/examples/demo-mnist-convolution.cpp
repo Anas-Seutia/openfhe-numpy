@@ -60,13 +60,16 @@ void RunMNISTConvolution(const std::vector<std::vector<double>>& inputImage,
     TIC(t);
     auto flatVec = EncodeMatrix(inputImage, batchSize);
     auto ptVec = cc->MakeCKKSPackedPlaintext(flatVec);
-    auto ptDiags = MakeCKKSPackedPlaintextVectors(cc, diagonals);
     auto ctVec = cc->Encrypt(keyPair.publicKey, ptVec);
-    std::cout << "Encryption: " << TOC(t) << " ms\n";
+    std::cout << "Input Encryption: " << TOC(t) << " ms\n";
+    auto ptDiags = MakeCKKSPackedPlaintextVectors(cc, diagonals);
+    auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
+    std::cout << "Weight Encryption: " << TOC(t) << " ms\n";
 
     // Compute
     TIC(t);
-    auto ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
+    // auto ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
     std::cout << "Computation: " << TOC(t) << " ms\n";
 
     // Decrypt
@@ -75,11 +78,11 @@ void RunMNISTConvolution(const std::vector<std::vector<double>>& inputImage,
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);
     uint32_t output_height = (input_height + 2 * padding - 3) / stride + 1;
     uint32_t output_width = (input_width + 2 * padding - 3) / stride + 1;
-    ptResult->SetLength(output_height * output_width);
+    ptResult->SetLength(batchSize);
     auto result = ptResult->GetRealPackedValue();
     std::cout << "Decryption: " << TOC(t) << " ms\n";
 
-    std::cout << "\nEncrypted Result (first 10 values):\n";
+    std::cout << "\nEncrypted Result:\n";
     PrintVector(std::vector<double>(result.begin(), result.begin() + batchSize));
 
     std::cout << "\n=== Demo Complete ===\n";

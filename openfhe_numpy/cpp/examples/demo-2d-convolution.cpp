@@ -32,7 +32,7 @@ CryptoContext<DCRTPoly> GenerateCryptoContext(uint32_t multDepth, uint32_t batch
     * decryption, the scaling factor is removed so the user is presented with
     * the real number result of 0.13.
     */
-    uint32_t scaleModSize = 50;
+    uint32_t scaleModSize = 59;
 
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(multDepth);
@@ -132,7 +132,7 @@ std::vector<std::vector<double>> DiagonalConv_Packing(
 void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std::vector<double> inputVector) {
     std::cout << "=== DEMO: Conv. (Matrix-Vector Product) with Diagonal Encoding ===" << std::endl;
 
-    uint multDepth = 10 ;
+    uint multDepth = 10;
 
     printf("\nMatrix: \n");
     PrintMatrix(inputMatrix);
@@ -193,7 +193,8 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     TimeVar t_mult;
     TIC(t_mult);
     
-    Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
+    // Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
+    Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
     
     double time_mult = TOC(t_mult);
     std::cout << "Homomorphic multiplication time: " << time_mult << " ms" << std::endl;
