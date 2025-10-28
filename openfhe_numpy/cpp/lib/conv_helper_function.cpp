@@ -456,13 +456,16 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                                         std::vector<int32_t>& rotations) { 
 
     if (rotations.empty()) {
+        rotations.reserve(diagonals.size());
         for (int32_t k = 0; k < diagonals.size(); ++k) {
             rotations.push_back(k);
         }
     }
 
-    Ciphertext<DCRTPoly> ctResult;
     auto cryptoContext = ctVector->GetCryptoContext();
+    Ciphertext<DCRTPoly> ctResult;
+    Ciphertext<DCRTPoly> ctRotated;
+    Ciphertext<DCRTPoly> ctProduct;
     bool first = true;
 
     for (const int32_t rotation : rotations) {        
