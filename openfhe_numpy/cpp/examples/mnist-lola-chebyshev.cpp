@@ -10,9 +10,14 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
 
 using namespace openfhe_numpy;
 using namespace lbcrypto;
+
+// ========== DEBUG MODE ==========
+// Set to true to decrypt and print intermediate values after each layer
+constexpr bool DEBUG_MODE = true;
 
 /**
  * @brief MNIST LoLa Network Architecture (Chebyshev Approximation for ReLU)
@@ -25,6 +30,51 @@ using namespace lbcrypto;
  * - ReLU: Chebyshev approximation
  * - Dense2: 64 -> 10 neurons (output classes)
  */
+
+/**
+ * @brief Print min/max bounds of decrypted vector
+ */
+void PrintBounds(const std::vector<double>& vec, const std::string& name) {
+    double minVal = *std::min_element(vec.begin(), vec.end());
+    double maxVal = *std::max_element(vec.begin(), vec.end());
+    std::cout << "  " << name << " bounds: [" << std::fixed << std::setprecision(6)
+              << minVal << ", " << maxVal << "]" << std::endl;
+}
+
+/**
+ * @brief Decrypt and print first N values for debugging
+ */
+void PrintDebugValues(
+    CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct,
+    const PrivateKey<DCRTPoly>& secretKey,
+    const std::string& name,
+    size_t numValues = 10,
+    size_t totalElements = 0
+) {
+    if (!DEBUG_MODE) return;
+
+    Plaintext ptxt;
+    cc->Decrypt(secretKey, ct, &ptxt);
+    if (totalElements > 0) {
+        ptxt->SetLength(totalElements);
+    }
+    std::vector<double> values = ptxt->GetRealPackedValue();
+
+    std::cout << "  [DEBUG] " << name << " (first " << std::min(numValues, values.size()) << " values):" << std::endl;
+    std::cout << "    ";
+    for (size_t i = 0; i < std::min(numValues, values.size()); i++) {
+        std::cout << std::fixed << std::setprecision(4) << values[i];
+        if (i < std::min(numValues, values.size()) - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+
+    // Also print bounds
+    if (totalElements > 0 && values.size() > totalElements) {
+        values.resize(totalElements);
+    }
+    PrintBounds(values, name);
+}
 
 /**
  * @brief Helper function to perform ReLU using Chebyshev approximation
@@ -48,21 +98,6 @@ Ciphertext<DCRTPoly> EvalReLUChebyshev(
 }
 
 /**
- * @brief Helper function to perform ReLU using Minimax approximation
- */
-Ciphertext<DCRTPoly> EvalReLUMinimax(
-    CryptoContext<DCRTPoly>& cc,
-    const Ciphertext<DCRTPoly>& ct,
-    const MinimaxCoefficients& signCoeffs,
-    double lowerBound = -10.0,
-    double upperBound = 10.0
-) {
-    // Use minimax sign approximation: ReLU(x) = x * (1 + sign(x)) / 2
-    auto reluResult = EvalMiniMaxSign(cc, ct, signCoeffs, lowerBound, upperBound);
-    return reluResult;
-}
-
-/**
  * @brief Perform dense (fully connected) layer using diagonal method
  * Using PLAINTEXT weights (not encrypted) to save memory
  */
@@ -73,7 +108,7 @@ Ciphertext<DCRTPoly> EvalDenseLayer(
     std::vector<int32_t>& rotationIndices
 ) {
     return EvalMultMatVecDiag(ctInput, ptWeightDiags, rotationIndices);
-}
+} 
 
 void MNISTLoLaInference() {
     std::cout << "\n" << std::string(80, '=') << std::endl;
@@ -100,11 +135,36 @@ void MNISTLoLaInference() {
     std::vector<std::vector<double>> mnistInput(28, std::vector<double>(28, 0.0));
 
     // Create a simple vertical edge pattern in the center
-    for (int i = 8; i < 20; i++) {
-        for (int j = 12; j < 16; j++) {
-            mnistInput[i][j] = (j < 14) ? 1.0 : 0.5;
-        }
-    }
+    mnistInput = {
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 18, 18, 18, 126, 136, 175, 26, 166, 255, 247, 127, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 30, 36, 94, 154, 170, 253, 253, 253, 253, 253, 225, 172, 253, 242, 195, 64, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 49, 238, 253, 253, 253, 253, 253, 253, 253, 253, 251, 93, 82, 82, 56, 39, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 18, 219, 253, 253, 253, 253, 253, 198, 182, 247, 241, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 80, 156, 107, 253, 253, 205, 11, 0, 43, 154, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 1, 154, 253, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 139, 253, 190, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 190, 253, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 241, 225, 160, 108, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 81, 240, 253, 253, 119, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 186, 253, 253, 150, 27, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 93, 252, 253, 187, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 249, 253, 249, 64, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 46, 130, 183, 253, 253, 207, 2, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 148, 229, 253, 253, 253, 250, 182, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 114, 221, 253, 253, 253, 253, 201, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 23, 66, 213, 253, 253, 253, 253, 198, 81, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 18, 171, 219, 253, 253, 253, 253, 195, 80, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 55, 172, 226, 253, 253, 253, 253, 244, 133, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 136, 253, 253, 253, 212, 135, 132, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    };
 
     std::cout << "Sample input created (28x28)" << std::endl;
 
@@ -130,11 +190,11 @@ void MNISTLoLaInference() {
     // For Chebyshev approximation of degree 63, we need sufficient depth
     // Each ReLU consumes ~6-7 levels, plus conv and dense layers
     uint32_t polyDegree = 58;
-    uint32_t multDepth = 30;  // Increased depth for full network with approximations
+    uint32_t multDepth = 20;  // Increased depth for full network with approximations
     
     parameters.SetMultiplicativeDepth(multDepth);
     
-    uint32_t batchSize = 1024;  // Enough for 720 elements from conv output
+    uint32_t batchSize = 2048;  // Enough for 720 elements from conv output
     parameters.SetBatchSize(batchSize);
     
     CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
@@ -215,16 +275,18 @@ void MNISTLoLaInference() {
     std::vector<std::vector<double>> convDiagonals = PackMatDiagWise(toeplitzConv, batchSize);
     std::vector<int32_t> convRotations = getOptimalRots(convDiagonals);
     std::cout << "  Conv Toeplitz: " << convRows << " rows, "
-              << convRotations.size() << " non-zero diagonals" << std::endl;
-
+                    << convRotations.size() << " non-zero diagonals" << std::endl;
+    
     // Dense layer 1
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1Weights, batchSize);
     std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals);
+    std::size_t dense1Rows = dense1Weights.size();
     std::cout << "  Dense1: " << dense1Rotations.size() << " non-zero diagonals" << std::endl;
-
+    
     // Dense layer 2
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals);
+    std::size_t dense2Rows = dense2Weights.size();
     std::cout << "  Dense2: " << dense2Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Collect all rotation indices (one key per index for faster inference)
@@ -232,6 +294,9 @@ void MNISTLoLaInference() {
     allRotations.insert(allRotations.end(), convRotations.begin(), convRotations.end());
     allRotations.insert(allRotations.end(), dense1Rotations.begin(), dense1Rotations.end());
     allRotations.insert(allRotations.end(), dense2Rotations.begin(), dense2Rotations.end());
+    allRotations.push_back(-convRows);
+    allRotations.push_back(-dense1Rows);
+    allRotations.push_back(-dense2Rows);
 
     // Remove duplicates
     std::sort(allRotations.begin(), allRotations.end());
@@ -255,7 +320,7 @@ void MNISTLoLaInference() {
     // ========== Encrypt Input ==========
     std::cout << "\nEncrypting input..." << std::endl;
     TIC(t);
-    std::vector<double> flatInput = EncodeMatrix(mnistInput, batchSize);
+    std::vector<double> flatInput = EncodeMatrix(mnistInput, 784*2);
     auto ptInput = cc->MakeCKKSPackedPlaintext(flatInput);
     auto ctInput = cc->Encrypt(keyPair.publicKey, ptInput);
     std::cout << "Input encryption time: " << TOC(t) << " ms" << std::endl;
@@ -273,48 +338,55 @@ void MNISTLoLaInference() {
     double convTime = TOC(t);
     std::cout << "  Time: " << convTime << " ms" << std::endl;
     std::cout << "  Level: " << ctConvOut->GetLevel() << std::endl;
+    PrintDebugValues(cc, ctConvOut, keyPair.secretKey, "Conv output", 10, flattenedSize);
 
     // Layer 2: ReLU (Chebyshev approximation)
     std::cout << "\n[Layer 2] ReLU (Chebyshev approximation, degree " << polyDegree << ")..." << std::endl;
     TIC(t);
     // NOTE: Run mnist-lola-cleartext first to get accurate bounds from Conv output
     // Update these bounds based on cleartext analysis for best approximation accuracy
-    double relu1Lower = -2.5;
-    double relu1Upper = 2.4;
+    double relu1Lower = -1028.5;
+    double relu1Upper = 937.9;
     auto ctReLU1 = EvalReLUChebyshev(cc, ctConvOut, polyDegree, relu1Lower, relu1Upper);
     double relu1Time = TOC(t);
     std::cout << "  Time: " << relu1Time << " ms" << std::endl;
     std::cout << "  Bounds: [" << relu1Lower << ", " << relu1Upper << "]" << std::endl;
     std::cout << "  Level: " << ctReLU1->GetLevel() << std::endl;
+    PrintDebugValues(cc, ctReLU1, keyPair.secretKey, "ReLU1 output", 10, flattenedSize);
 
     // Layer 3: Dense 1 (720 -> 64)
     std::cout << "\n[Layer 3] Dense1 (720 -> 64)..." << std::endl;
     TIC(t);
+    cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -convRows));
     auto ctDense1Out = EvalDenseLayer(cc, ctReLU1, ptDense1Diags, dense1Rotations);
     double dense1Time = TOC(t);
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense1Out->GetLevel() << std::endl;
+    PrintDebugValues(cc, ctDense1Out, keyPair.secretKey, "Dense1 output", 10, dense1Output);
 
     // Layer 4: ReLU (Chebyshev approximation)
     std::cout << "\n[Layer 4] ReLU (Chebyshev approximation, degree " << polyDegree << ")..." << std::endl;
     TIC(t);
     // NOTE: Run mnist-lola-cleartext first to get accurate bounds from Dense1 output
     // Update these bounds based on cleartext analysis for best approximation accuracy
-    double relu2Lower = -4.5;
-    double relu2Upper = 5.3;
+    double relu2Lower = -2376.5;
+    double relu2Upper = 2330.2;
     auto ctReLU2 = EvalReLUChebyshev(cc, ctDense1Out, polyDegree, relu2Lower, relu2Upper);
     double relu2Time = TOC(t);
     std::cout << "  Time: " << relu2Time << " ms" << std::endl;
     std::cout << "  Bounds: [" << relu2Lower << ", " << relu2Upper << "]" << std::endl;
     std::cout << "  Level: " << ctReLU2->GetLevel() << std::endl;
+    PrintDebugValues(cc, ctReLU2, keyPair.secretKey, "ReLU2 output", 10, dense1Output);
 
     // Layer 5: Dense 2 (64 -> 10)
     std::cout << "\n[Layer 5] Dense2 (64 -> 10)..." << std::endl;
     TIC(t);
+    cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -dense1Rows));
     auto ctOutput = EvalDenseLayer(cc, ctReLU2, ptDense2Diags, dense2Rotations);
     double dense2Time = TOC(t);
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctOutput->GetLevel() << std::endl;
+    PrintDebugValues(cc, ctOutput, keyPair.secretKey, "Final output", 10, dense2Output);
 
     double totalInferenceTime = convTime + relu1Time + dense1Time + relu2Time + dense2Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms" << std::endl;

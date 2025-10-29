@@ -8,6 +8,10 @@
 
 using namespace std::chrono;
 
+// ========== DEBUG MODE ==========
+// Set to true to print intermediate values after each layer
+constexpr bool DEBUG_MODE = true;
+
 /**
  * @brief MNIST LoLa Network Architecture (Cleartext - No Encryption)
  *
@@ -31,6 +35,55 @@ void PrintBounds(const std::vector<double>& vec, const std::string& name) {
 }
 
 /**
+ * @brief Print first N values for debugging
+ */
+void PrintDebugValues(const std::vector<double>& vec, const std::string& name, size_t numValues = 10) {
+    if (!DEBUG_MODE) return;
+
+    std::cout << "  [DEBUG] " << name << " (first " << std::min(numValues, vec.size()) << " values):" << std::endl;
+    std::cout << "    ";
+    for (size_t i = 0; i < std::min(numValues, vec.size()); i++) {
+        std::cout << std::fixed << std::setprecision(4) << vec[i];
+        if (i < std::min(numValues, vec.size()) - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+}
+
+/**
+ * @brief Print first N values of conv kernel for debugging
+ */
+void PrintKernelDebug(const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel, const std::string& name, size_t numValues = 10) {
+    if (!DEBUG_MODE) return;
+
+    std::cout << "  [DEBUG WEIGHTS] " << name << " first channel [0][0] (first " << numValues << " values, flattened):" << std::endl;
+    std::cout << "    ";
+    size_t count = 0;
+    for (size_t i = 0; i < kernel[0][0].size() && count < numValues; i++) {
+        for (size_t j = 0; j < kernel[0][0][i].size() && count < numValues; j++) {
+            std::cout << std::fixed << std::setprecision(4) << kernel[0][0][i][j];
+            if (count < numValues - 1) std::cout << ", ";
+            count++;
+        }
+    }
+    std::cout << std::endl;
+}
+
+/**
+ * @brief Print first N values of dense weights for debugging
+ */
+void PrintWeightsDebug(const std::vector<std::vector<double>>& weights, const std::string& name, size_t numValues = 10) {
+    if (!DEBUG_MODE) return;
+
+    std::cout << "  [DEBUG WEIGHTS] " << name << " first row [0] (first " << std::min(numValues, weights[0].size()) << " values):" << std::endl;
+    std::cout << "    ";
+    for (size_t i = 0; i < std::min(numValues, weights[0].size()); i++) {
+        std::cout << std::fixed << std::setprecision(4) << weights[0][i];
+        if (i < std::min(numValues, weights[0].size()) - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+}
+
+/**
  * @brief Apply ReLU activation function
  */
 std::vector<double> ReLU(const std::vector<double>& input) {
@@ -42,61 +95,56 @@ std::vector<double> ReLU(const std::vector<double>& input) {
 }
 
 /**
- * @brief Perform 2D convolution
- * @param input Input image [height][width]
- * @param kernels Convolution kernels [out_channels][in_channels][kernel_h][kernel_w]
- * @param stride Stride value
- * @param padding Padding value
- * @return Output feature maps [out_channels][out_height][out_width]
+ * @brief General cleartext 2D convolution
+ * @param input 3D input tensor (in_channels, height, width)
+ * @param kernel 4D kernel tensor (out_channels, in_channels, kernel_height, kernel_width)
+ * @param stride Convolution stride
+ * @param padding Zero padding size
+ * @param dilation Kernel dilation
+ * @return 3D output tensor (out_channels, output_height, output_width)
  */
 std::vector<std::vector<std::vector<double>>> Conv2D(
-    const std::vector<std::vector<double>>& input,
-    const std::vector<std::vector<std::vector<std::vector<double>>>>& kernels,
-    uint32_t stride,
-    uint32_t padding
+    const std::vector<std::vector<std::vector<double>>>& input,
+    const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel,
+    uint32_t stride = 1,
+    uint32_t padding = 0,
+    uint32_t dilation = 1
 ) {
-    uint32_t inputHeight = input.size();
-    uint32_t inputWidth = input[0].size();
-    uint32_t kernelHeight = kernels[0][0].size();
-    uint32_t kernelWidth = kernels[0][0][0].size();
-    uint32_t outputChannels = kernels.size();
+    uint32_t in_channels = input.size();
+    uint32_t input_height = input[0].size();
+    uint32_t input_width = input[0][0].size();
+    uint32_t out_channels = kernel.size();
+    uint32_t kernel_height = kernel[0][0].size();
+    uint32_t kernel_width = kernel[0][0][0].size();
 
-    uint32_t outputHeight = (inputHeight - kernelHeight + 2 * padding) / stride + 1;
-    uint32_t outputWidth = (inputWidth - kernelWidth + 2 * padding) / stride + 1;
+    uint32_t output_height = (input_height + 2 * padding - dilation * (kernel_height - 1) - 1) / stride + 1;
+    uint32_t output_width = (input_width + 2 * padding - dilation * (kernel_width - 1) - 1) / stride + 1;
 
-    // Initialize output
     std::vector<std::vector<std::vector<double>>> output(
-        outputChannels,
-        std::vector<std::vector<double>>(
-            outputHeight,
-            std::vector<double>(outputWidth, 0.0)
-        )
+        out_channels,
+        std::vector<std::vector<double>>(output_height, std::vector<double>(output_width, 0.0))
     );
 
-    // Perform convolution
-    for (uint32_t oc = 0; oc < outputChannels; oc++) {
-        for (uint32_t oh = 0; oh < outputHeight; oh++) {
-            for (uint32_t ow = 0; ow < outputWidth; ow++) {
+    for (uint32_t oc = 0; oc < out_channels; ++oc) {
+        for (uint32_t oh = 0; oh < output_height; ++oh) {
+            for (uint32_t ow = 0; ow < output_width; ++ow) {
                 double sum = 0.0;
-
-                // Convolve over kernel
-                for (uint32_t kh = 0; kh < kernelHeight; kh++) {
-                    for (uint32_t kw = 0; kw < kernelWidth; kw++) {
-                        int ih = oh * stride + kh - padding;
-                        int iw = ow * stride + kw - padding;
-
-                        // Check bounds (padding)
-                        if (ih >= 0 && ih < (int)inputHeight && iw >= 0 && iw < (int)inputWidth) {
-                            sum += input[ih][iw] * kernels[oc][0][kh][kw];  // Single input channel
-                        }
+                for (uint32_t ic = 0; ic < in_channels; ++ic) {
+                    for (uint32_t kh = 0; kh < kernel_height; ++kh) {
+                        for (uint32_t kw = 0; kw < kernel_width; ++kw) {
+                            int32_t ih = oh * stride - padding + kh * dilation;
+                            int32_t iw = ow * stride - padding + kw * dilation;
+                            if (ih >= 0 && ih < (int32_t)input_height &&
+                                iw >= 0 && iw < (int32_t)input_width) {
+                                    sum += input[ic][ih][iw] * kernel[oc][ic][kh][kw];
+                                }
+                            }
                     }
                 }
-
                 output[oc][oh][ow] = sum;
             }
         }
     }
-
     return output;
 }
 
@@ -162,16 +210,41 @@ void MNISTLoLaCleartext() {
 
     // ========== Sample MNIST Input (simplified) ==========
     std::cout << "Creating sample MNIST input..." << std::endl;
-    std::vector<std::vector<double>> mnistInput(28, std::vector<double>(28, 0.0));
+    std::vector<std::vector<std::vector<double>>> mnistInput(1,
+        std::vector<std::vector<double>>(28, std::vector<double>(28, 0.0)));
 
-    // Create a simple vertical edge pattern in the center
-    for (int i = 8; i < 20; i++) {
-        for (int j = 12; j < 16; j++) {
-            mnistInput[i][j] = (j < 14) ? 1.0 : 0.5;
-        }
-    }
+    mnistInput[0] = {
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 18, 18, 18, 126, 136, 175, 26, 166, 255, 247, 127, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 30, 36, 94, 154, 170, 253, 253, 253, 253, 253, 225, 172, 253, 242, 195, 64, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 49, 238, 253, 253, 253, 253, 253, 253, 253, 253, 251, 93, 82, 82, 56, 39, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 18, 219, 253, 253, 253, 253, 253, 198, 182, 247, 241, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 80, 156, 107, 253, 253, 205, 11, 0, 43, 154, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 1, 154, 253, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 139, 253, 190, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 190, 253, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 241, 225, 160, 108, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 81, 240, 253, 253, 119, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 186, 253, 253, 150, 27, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 93, 252, 253, 187, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 249, 253, 249, 64, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 46, 130, 183, 253, 253, 207, 2, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 148, 229, 253, 253, 253, 250, 182, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 114, 221, 253, 253, 253, 253, 201, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 23, 66, 213, 253, 253, 253, 253, 198, 81, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 18, 171, 219, 253, 253, 253, 253, 195, 80, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 55, 172, 226, 253, 253, 253, 253, 244, 133, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 136, 253, 253, 253, 212, 135, 132, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    };
 
-    std::cout << "Sample input created (28x28)" << std::endl;
+    std::cout << "Sample input created (1 channel, 28x28)" << std::endl;
 
     // ========== Define Network Weights ==========
     std::cout << "\nInitializing network weights..." << std::endl;
@@ -199,6 +272,7 @@ void MNISTLoLaCleartext() {
     std::cout << "  Conv output shape: " << convOutputChannels << " channels, "
               << convOutputHeight << "x" << convOutputWidth
               << " = " << flattenedSize << " total" << std::endl;
+    PrintKernelDebug(convKernel, "Conv kernel");
 
     // Dense layer 1: 720 -> 64
     // Using same pseudo-random initialization as encrypted version
@@ -207,23 +281,24 @@ void MNISTLoLaCleartext() {
     std::vector<std::vector<double>> dense1Weights(dense1Output, std::vector<double>(dense1Input, 0.0));
     for (uint32_t i = 0; i < dense1Output; i++) {
         for (uint32_t j = 0; j < dense1Input; j++) {
-            dense1Weights[i][j] = (rand() % 200 - 100) / 200.0;  // Scaled to prevent explosion
+            dense1Weights[i][j] = (rand() % 200 - 100) / 200.0; 
         }
     }
     std::cout << "  Dense1 shape: " << dense1Input << " -> " << dense1Output << std::endl;
+    PrintWeightsDebug(dense1Weights, "Dense1 weights");
 
     // Dense layer 2: 64 -> 10
     // Using same random initialization as encrypted version WITH SCALING
     uint32_t dense2Input = dense1Output;
     uint32_t dense2Output = 10;
-    double dense2Scale = 1.0 / std::sqrt(dense2Input);  // Xavier scaling
     std::vector<std::vector<double>> dense2Weights(dense2Output, std::vector<double>(dense2Input, 0.0));
     for (uint32_t i = 0; i < dense2Output; i++) {
         for (uint32_t j = 0; j < dense2Input; j++) {
-            dense2Weights[i][j] = (rand() % 200 - 100) / 200.0;  // Scaled
+            dense2Weights[i][j] = (rand() % 200 - 100) / 200.0;
         }
     }
     std::cout << "  Dense2 shape: " << dense2Input << " -> " << dense2Output << std::endl;
+    PrintWeightsDebug(dense2Weights, "Dense2 weights");
 
     // ========== Forward Pass ==========
     std::cout << "\n" << std::string(80, '-') << std::endl;
@@ -235,7 +310,7 @@ void MNISTLoLaCleartext() {
     // Layer 1: Convolution
     std::cout << "\n[Layer 1] Convolution (28x28x1 -> 12x12x5)..." << std::endl;
     auto start = high_resolution_clock::now();
-    auto convOut = Conv2D(mnistInput, convKernel, convStride, convPadding);
+    auto convOut = Conv2D(mnistInput, convKernel, convStride, convPadding, 1);
     auto end = high_resolution_clock::now();
     double convTime = duration_cast<microseconds>(end - start).count() / 1000.0;
     std::cout << "  Time: " << convTime << " ms" << std::endl;
@@ -245,6 +320,7 @@ void MNISTLoLaCleartext() {
     std::cout << "  Flattened size: " << flatConvOut.size() << std::endl;
     PrintBounds(flatConvOut, "Conv output");
     std::cout << "  >>> Use these bounds for Chebyshev ReLU1 <<<" << std::endl;
+    PrintDebugValues(flatConvOut, "Conv output");
 
     // Layer 2: ReLU
     std::cout << "\n[Layer 2] ReLU..." << std::endl;
@@ -253,6 +329,7 @@ void MNISTLoLaCleartext() {
     end = high_resolution_clock::now();
     double relu1Time = duration_cast<microseconds>(end - start).count() / 1000.0;
     std::cout << "  Time: " << relu1Time << " ms" << std::endl;
+    PrintDebugValues(relu1Out, "ReLU1 output");
 
     // Layer 3: Dense 1 (720 -> 64)
     std::cout << "\n[Layer 3] Dense1 (720 -> 64)..." << std::endl;
@@ -263,6 +340,7 @@ void MNISTLoLaCleartext() {
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     PrintBounds(dense1Out, "Dense1 output");
     std::cout << "  >>> Use these bounds for Chebyshev ReLU2 <<<" << std::endl;
+    PrintDebugValues(dense1Out, "Dense1 output");
 
     // Layer 4: ReLU
     std::cout << "\n[Layer 4] ReLU..." << std::endl;
@@ -271,6 +349,7 @@ void MNISTLoLaCleartext() {
     end = high_resolution_clock::now();
     double relu2Time = duration_cast<microseconds>(end - start).count() / 1000.0;
     std::cout << "  Time: " << relu2Time << " ms" << std::endl;
+    PrintDebugValues(relu2Out, "ReLU2 output");
 
     // Layer 5: Dense 2 (64 -> 10)
     std::cout << "\n[Layer 5] Dense2 (64 -> 10)..." << std::endl;
@@ -279,6 +358,7 @@ void MNISTLoLaCleartext() {
     end = high_resolution_clock::now();
     double dense2Time = duration_cast<microseconds>(end - start).count() / 1000.0;
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
+    PrintDebugValues(output, "Final output");
 
     auto totalEnd = high_resolution_clock::now();
     double totalInferenceTime = duration_cast<microseconds>(totalEnd - totalStart).count() / 1000.0;
