@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <vector>
 #include <string>
+#include <cmath>
 
 using namespace openfhe_numpy;
 using namespace lbcrypto;
@@ -25,6 +26,60 @@ CryptoContext<DCRTPoly> GenerateCryptoContext(uint32_t multDepth, uint32_t batch
     cc->Enable(ADVANCEDSHE);
     std::cout << "CKKS scheme is using ring dimension " << cc->GetRingDimension() << std::endl << std::endl;
     return cc;
+}
+
+/**
+ * @brief Compare FHE result with expected cleartext result
+ *
+ * @param fheResult Flat vector from FHE computation
+ * @param expected 3D expected result (out_channels, height, width)
+ * @param tolerance Maximum allowed difference
+ * @return true if results match within tolerance
+ */
+bool CompareResults(const std::vector<double>& fheResult,
+                    const std::vector<std::vector<std::vector<double>>>& expected,
+                    double tolerance = 1e-6) {
+    // Flatten expected result
+    std::vector<double> expectedFlat;
+    for (const auto& channel : expected) {
+        for (const auto& row : channel) {
+            for (double val : row) {
+                expectedFlat.push_back(val);
+            }
+        }
+    }
+
+    if (fheResult.size() != expectedFlat.size()) {
+        std::cout << "❌ Size mismatch: FHE=" << fheResult.size()
+                  << ", Expected=" << expectedFlat.size() << std::endl;
+        return false;
+    }
+
+    double maxError = 0.0;
+    size_t errorCount = 0;
+
+    for (size_t i = 0; i < fheResult.size(); ++i) {
+        double error = std::abs(fheResult[i] - expectedFlat[i]);
+        if (error > tolerance) {
+            if (errorCount < 5) {  // Print first 5 errors
+                std::cout << "❌ Mismatch at index " << i
+                          << ": FHE=" << fheResult[i]
+                          << ", Expected=" << expectedFlat[i]
+                          << ", Error=" << error << std::endl;
+            }
+            errorCount++;
+        }
+        maxError = std::max(maxError, error);
+    }
+
+    if (errorCount > 0) {
+        std::cout << "❌ Total errors: " << errorCount << "/" << fheResult.size()
+                  << ", Max error: " << maxError << std::endl;
+        return false;
+    }
+
+    std::cout << "✅ Results match! Max error: " << maxError << std::endl;
+    return true;
 }
 
 /**
@@ -124,7 +179,7 @@ void Test5x5Kernel() {
 
     auto toeplitzMatrix = ConstructConv2DToeplitz(kernel, input_height, input_width, stride, padding, dilation, 1, 1, 1);
     std::size_t nRows = toeplitzMatrix.size();
-    std::size_t nCols = !toeplitzMatrix.empty() ? toeplitzMatrix[0].size() : 0;
+    // std::size_t nCols = !toeplitzMatrix.empty() ? toeplitzMatrix[0].size() : 0;
 
     std::vector<std::vector<double>> diagonals = PackMatDiagWise(toeplitzMatrix, batchSize);
     std::vector<double> flatVec = EncodeMatrix(input[0], batchSize);
@@ -145,7 +200,10 @@ void Test5x5Kernel() {
 
     std::cout << "\n--- FHE Encrypted Result ---" << std::endl;
     PrintVector(result);
-    std::cout << "\n✓ Test Complete!" << std::endl;
+
+    std::cout << "\n--- Verification ---" << std::endl;
+    bool passed = CompareResults(result, expected);
+    std::cout << (passed ? "\n✓ Test Passed!" : "\n✗ Test Failed!") << std::endl;
 }
 
 void TestMultipleOutputChannels() {
@@ -205,7 +263,7 @@ void TestMultipleOutputChannels() {
 
     auto toeplitzMatrix = ConstructConv2DToeplitz(kernel, input_height, input_width, stride, padding, dilation, 1, 1, 1);
     std::size_t nRows = toeplitzMatrix.size();
-    std::size_t nCols = !toeplitzMatrix.empty() ? toeplitzMatrix[0].size() : 0;
+    // std::size_t nCols = !toeplitzMatrix.empty() ? toeplitzMatrix[0].size() : 0;
 
     std::vector<std::vector<double>> diagonals = PackMatDiagWise(toeplitzMatrix, batchSize);
     std::vector<double> flatVec = EncodeMatrix(input[0], batchSize);
@@ -226,7 +284,10 @@ void TestMultipleOutputChannels() {
 
     std::cout << "\n--- FHE Encrypted Result ---" << std::endl;
     PrintVector(result);
-    std::cout << "\n✓ Test Complete!" << std::endl;
+
+    std::cout << "\n--- Verification ---" << std::endl;
+    bool passed = CompareResults(result, expected);
+    std::cout << (passed ? "\n✓ Test Passed!" : "\n✗ Test Failed!") << std::endl;
 }
 
 
@@ -341,7 +402,10 @@ void TestMultipleInputChannels() {
 
     std::cout << "\n--- FHE Encrypted Result (should be 4x4 output) ---" << std::endl;
     PrintVector(result);
-    std::cout << "\n✓ Test Complete!" << std::endl;
+
+    std::cout << "\n--- Verification ---" << std::endl;
+    bool passed = CompareResults(result, expected);
+    std::cout << (passed ? "\n✓ Test Passed!" : "\n✗ Test Failed!") << std::endl;
 }
 
 void TestBothFeatures() {
@@ -452,7 +516,10 @@ void TestBothFeatures() {
 
     std::cout << "\n--- FHE Encrypted Result ---" << std::endl;
     PrintVector(result);
-    std::cout << "\n✓ Test Complete!" << std::endl;
+
+    std::cout << "\n--- Verification ---" << std::endl;
+    bool passed = CompareResults(result, expected);
+    std::cout << (passed ? "\n✓ Test Passed!" : "\n✗ Test Failed!") << std::endl;
 }
 
 int main(int argc, char* argv[]) {
