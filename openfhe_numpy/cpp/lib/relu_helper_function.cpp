@@ -20,10 +20,11 @@ std::vector<std::vector<double>> GenerateMiniMaxSignCoefficients(
     
     std::vector<std::vector<double>> allCoeffs;
     allCoeffs.reserve(degrees.size());
-    
+
     // Parameters for MiniMax approximation
-    double alpha = std::pow(2.0, logalpha);  // Transition sharpness
+    // double alpha = std::pow(2.0, logalpha);  // Transition sharpness (unused in simplified version)
     double epsilon = std::pow(2.0, -logerr);  // Target error
+    (void)logalpha;  // Suppress unused parameter warning
 
     {
         uint32_t degree = degrees[0];
@@ -42,16 +43,16 @@ std::vector<std::vector<double>> GenerateMiniMaxSignCoefficients(
     
     // Intermediate stages: Iterative refinement
     // Each stage works on a narrower interval based on previous approximation errors
-    double prev_max_error = 0.1;  // Initial conservative estimate
+    // double prev_max_error = 0.1;  // Initial conservative estimate (unused in simplified version)
 
     for (size_t stage = 1; stage < degrees.size(); ++stage) {
         uint32_t degree = degrees[stage];
         bool is_last_stage = (stage == degrees.size() - 1);
-        
+
         // New interval = [-(1+max_err+ε), -(1-ε)] ∪ [1-ε, 1+max_err+ε]
         // Simplified: we use conservative bounds
         double max_interval = 1.0 + epsilon;
-        double min_interval = 1.0 - epsilon;
+        // double min_interval = 1.0 - epsilon;  // Reserved for future use
 
         std::function<double(double)> func;
 

@@ -276,8 +276,9 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     
     // Initialize Toeplitz matrix
     uint32_t n_rows = ctx_output_channel * ctx_output_height * ctx_output_width;
-    uint32_t n_cols = ctx_input_channel * input_height_padding * input_width_padding;
-    
+    // Note: n_cols computed for reference (not directly used in sparse construction)
+    // uint32_t n_cols = ctx_input_channel * input_height_padding * input_width_padding;
+
     // Using map for sparse representation (row -> col -> value)
     std::map<uint32_t, std::map<uint32_t, T>> sparse_matrix;
     
@@ -457,8 +458,8 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
 
     if (rotations.empty()) {
         rotations.reserve(diagonals.size());
-        for (int32_t k = 0; k < diagonals.size(); ++k) {
-            rotations.push_back(k);
+        for (size_t k = 0; k < diagonals.size(); ++k) {
+            rotations.push_back(static_cast<int32_t>(k));
         }
     }
 

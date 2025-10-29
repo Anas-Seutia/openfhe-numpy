@@ -76,8 +76,6 @@ void RunMNISTConvolution(const std::vector<std::vector<double>>& inputImage,
     TIC(t);
     Plaintext ptResult;
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);
-    uint32_t output_height = (input_height + 2 * padding - 3) / stride + 1;
-    uint32_t output_width = (input_width + 2 * padding - 3) / stride + 1;
     ptResult->SetLength(batchSize);
     auto result = ptResult->GetRealPackedValue();
     std::cout << "Decryption: " << TOC(t) << " ms\n";
