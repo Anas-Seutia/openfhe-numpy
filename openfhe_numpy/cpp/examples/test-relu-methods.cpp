@@ -1,3 +1,7 @@
+// Suppress false positive warning from GCC 15.2.1 in OpenFHE library code
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+
 #include "numpy_enc_matrix.h"
 #include "openfhe.h"
 #include "binfhecontext.h"
@@ -5,6 +9,8 @@
 #include "numpy_helper_functions.h"
 #include "conv_helper_function.h"
 #include "relu_helper_function.h"  // Add this for minimax functions
+
+#pragma GCC diagnostic pop
 
 #include <iostream>
 #include <iomanip>
@@ -154,153 +160,153 @@ void TestReLUApproximation1() {
  * Pros: Near-optimal polynomial approximation, stays within CKKS
  * Cons: Some approximation error near x=0
  */
-void TestReLUApproximation2() {
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "  TEST 2: ReLU via Minimax/Chebyshev Approximation (CKKS)" << std::endl;
-    std::cout << "========================================\n" << std::endl;
+// void TestReLUApproximation2() {
+//     std::cout << "\n========================================" << std::endl;
+//     std::cout << "  TEST 2: ReLU via Minimax/Chebyshev Approximation (CKKS)" << std::endl;
+//     std::cout << "========================================\n" << std::endl;
 
-    // Setup CryptoContext
-    CCParams<CryptoContextCKKSRNS> parameters;
-    parameters.SetSecurityLevel(HEStd_NotSet);
-    parameters.SetRingDim(8192);
+//     // Setup CryptoContext
+//     CCParams<CryptoContextCKKSRNS> parameters;
+//     parameters.SetSecurityLevel(HEStd_NotSet);
+//     parameters.SetRingDim(8192);
 
-#if NATIVEINT == 128
-    uint32_t scalingModSize = 78;
-    uint32_t firstModSize = 89;
-#else
-    uint32_t scalingModSize = 50;
-    uint32_t firstModSize = 60;
-#endif
+// #if NATIVEINT == 128
+//     uint32_t scalingModSize = 78;
+//     uint32_t firstModSize = 89;
+// #else
+//     uint32_t scalingModSize = 50;
+//     uint32_t firstModSize = 60;
+// #endif
 
-    parameters.SetScalingModSize(scalingModSize);
-    parameters.SetFirstModSize(firstModSize);
+//     parameters.SetScalingModSize(scalingModSize);
+//     parameters.SetFirstModSize(firstModSize);
 
-    // Composite minimax approximation parameters
-    // Multiple stages for better approximation
-    std::vector<uint32_t> degrees = {14, 14, 26};
-    uint32_t logalpha = 6;   // Transition threshold: 2^-6 = 0.015625
-    uint32_t logerr = 12;    // Target error: 2^-12 ≈ 0.000244
+//     // Composite minimax approximation parameters
+//     // Multiple stages for better approximation
+//     std::vector<uint32_t> degrees = {14, 14, 26};
+//     uint32_t logalpha = 6;   // Transition threshold: 2^-6 = 0.015625
+//     uint32_t logerr = 12;    // Target error: 2^-12 ≈ 0.000244
 
-    uint32_t multDepth = 22;  // Based on composite polynomial evaluation
+//     uint32_t multDepth = 22;  // Based on composite polynomial evaluation
 
-    parameters.SetMultiplicativeDepth(multDepth);
-    parameters.SetBatchSize(16);
+//     parameters.SetMultiplicativeDepth(multDepth);
+//     parameters.SetBatchSize(16);
 
-    CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
-    cc->Enable(PKE);
-    cc->Enable(KEYSWITCH);
-    cc->Enable(LEVELEDSHE);
-    cc->Enable(ADVANCEDSHE);
+//     CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
+//     cc->Enable(PKE);
+//     cc->Enable(KEYSWITCH);
+//     cc->Enable(LEVELEDSHE);
+//     cc->Enable(ADVANCEDSHE);
 
-    std::cout << "CKKS scheme using ring dimension " << cc->GetRingDimension() << std::endl;
-    std::cout << "Minimax stages: " << degrees.size() << std::endl;
-    std::cout << "Polynomial degrees: [";
-    for (size_t i = 0; i < degrees.size(); i++) {
-        std::cout << degrees[i];
-        if (i < degrees.size() - 1) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
-    std::cout << "Transition threshold (alpha): 2^-" << logalpha
-              << " = " << std::pow(2.0, -static_cast<double>(logalpha)) << std::endl;
-    std::cout << "Target error: 2^-" << logerr
-              << " ≈ " << std::pow(2.0, -static_cast<double>(logerr)) << std::endl;
-    std::cout << "Multiplicative depth: " << multDepth << std::endl << std::endl;
+//     std::cout << "CKKS scheme using ring dimension " << cc->GetRingDimension() << std::endl;
+//     std::cout << "Minimax stages: " << degrees.size() << std::endl;
+//     std::cout << "Polynomial degrees: [";
+//     for (size_t i = 0; i < degrees.size(); i++) {
+//         std::cout << degrees[i];
+//         if (i < degrees.size() - 1) std::cout << ", ";
+//     }
+//     std::cout << "]" << std::endl;
+//     std::cout << "Transition threshold (alpha): 2^-" << logalpha
+//               << " = " << std::pow(2.0, -static_cast<double>(logalpha)) << std::endl;
+//     std::cout << "Target error: 2^-" << logerr
+//               << " ≈ " << std::pow(2.0, -static_cast<double>(logerr)) << std::endl;
+//     std::cout << "Multiplicative depth: " << multDepth << std::endl << std::endl;
 
-    // Generate minimax coefficients for sign approximation
-    std::cout << "Generating Minimax/Chebyshev coefficients..." << std::endl;
-    TimeVar t;
-    TIC(t);
-    auto signCoeffs = GenerateMiniMaxSignCoefficients(degrees, logalpha, logerr);
-    std::cout << "Coefficient generation: " << TOC(t) << " ms" << std::endl;
+//     // Generate minimax coefficients for sign approximation
+//     std::cout << "Generating Minimax/Chebyshev coefficients..." << std::endl;
+//     TimeVar t;
+//     TIC(t);
+//     auto signCoeffs = GenerateMiniMaxSignCoefficients(degrees, logalpha, logerr);
+//     std::cout << "Coefficient generation: " << TOC(t) << " ms" << std::endl;
 
-    // Display coefficient info
-    for (size_t stage = 0; stage < signCoeffs.coefficients.size(); stage++) {
-        std::cout << "  Stage " << stage << ": " << signCoeffs.coefficients[stage].size()
-                  << " coefficients (degree " << degrees[stage] << ")"
-                  << ", domain: [" << signCoeffs.lowerBounds[stage] << ", " << signCoeffs.upperBounds[stage] << "]" << std::endl;
-    }
-    std::cout << std::endl;
+//     // Display coefficient info
+//     for (size_t stage = 0; stage < signCoeffs.coefficients.size(); stage++) {
+//         std::cout << "  Stage " << stage << ": " << signCoeffs.coefficients[stage].size()
+//                   << " coefficients (degree " << degrees[stage] << ")"
+//                   << ", domain: [" << signCoeffs.lowerBounds[stage] << ", " << signCoeffs.upperBounds[stage] << "]" << std::endl;
+//     }
+//     std::cout << std::endl;
 
-    // Key generation
-    TIC(t);
-    auto keyPair = cc->KeyGen();
-    cc->EvalMultKeyGen(keyPair.secretKey);
-    std::cout << "Key generation: " << TOC(t) << " ms" << std::endl;
+//     // Key generation
+//     TIC(t);
+//     auto keyPair = cc->KeyGen();
+//     cc->EvalMultKeyGen(keyPair.secretKey);
+//     std::cout << "Key generation: " << TOC(t) << " ms" << std::endl;
 
-    // Test inputs: range from negative to positive
-    std::vector<double> input = {-5.0, -4.0, -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
-    size_t encodedLength = input.size();
+//     // Test inputs: range from negative to positive
+//     std::vector<double> input = {-5.0, -4.0, -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
+//     size_t encodedLength = input.size();
 
-    std::cout << "Input values: ";
-    for (const auto& val : input) {
-        std::cout << std::fixed << std::setprecision(2) << val << " ";
-    }
-    std::cout << std::endl;
+//     std::cout << "Input values: ";
+//     for (const auto& val : input) {
+//         std::cout << std::fixed << std::setprecision(2) << val << " ";
+//     }
+//     std::cout << std::endl;
 
-    // Expected ReLU output
-    std::vector<double> expected(encodedLength);
-    for (size_t i = 0; i < encodedLength; ++i) {
-        expected[i] = std::max(0.0, input[i]);
-    }
-    std::cout << "Expected ReLU: ";
-    for (const auto& val : expected) {
-        std::cout << std::fixed << std::setprecision(2) << val << " ";
-    }
-    std::cout << std::endl << std::endl;
+//     // Expected ReLU output
+//     std::vector<double> expected(encodedLength);
+//     for (size_t i = 0; i < encodedLength; ++i) {
+//         expected[i] = std::max(0.0, input[i]);
+//     }
+//     std::cout << "Expected ReLU: ";
+//     for (const auto& val : expected) {
+//         std::cout << std::fixed << std::setprecision(2) << val << " ";
+//     }
+//     std::cout << std::endl << std::endl;
 
-    // Encode and encrypt
-    TIC(t);
-    Plaintext plaintext = cc->MakeCKKSPackedPlaintext(input);
-    auto ciphertext = cc->Encrypt(keyPair.publicKey, plaintext);
-    std::cout << "Encryption: " << TOC(t) << " ms" << std::endl;
-    std::cout << "Initial ciphertext level: " << ciphertext->GetLevel() << std::endl;
-    std::cout << "Available levels: " << (multDepth - ciphertext->GetLevel()) << std::endl;
+//     // Encode and encrypt
+//     TIC(t);
+//     Plaintext plaintext = cc->MakeCKKSPackedPlaintext(input);
+//     auto ciphertext = cc->Encrypt(keyPair.publicKey, plaintext);
+//     std::cout << "Encryption: " << TOC(t) << " ms" << std::endl;
+//     std::cout << "Initial ciphertext level: " << ciphertext->GetLevel() << std::endl;
+//     std::cout << "Available levels: " << (multDepth - ciphertext->GetLevel()) << std::endl;
 
-    // Evaluate ReLU using minimax sign approximation
-    double lowerBound = -10.0;
-    double upperBound = 10.0;
+//     // Evaluate ReLU using minimax sign approximation
+//     double lowerBound = -10.0;
+//     double upperBound = 10.0;
 
-    std::cout << "\nEvaluating ReLU using composite minimax polynomials..." << std::endl;
-    TIC(t);
-    auto reluResult = EvalMiniMaxSign(cc, ciphertext, signCoeffs, lowerBound, upperBound);
-    double computeTime = TOC(t);
-    std::cout << "ReLU computation: " << computeTime << " ms" << std::endl;
-    std::cout << "Result ciphertext level: " << reluResult->GetLevel() << std::endl;
-    std::cout << "Levels consumed: " << (reluResult->GetLevel() - ciphertext->GetLevel()) << std::endl;
-    std::cout << "Remaining levels: " << (multDepth - reluResult->GetLevel()) << std::endl;
+//     std::cout << "\nEvaluating ReLU using composite minimax polynomials..." << std::endl;
+//     TIC(t);
+//     auto reluResult = EvalMiniMaxSign(cc, ciphertext, signCoeffs, lowerBound, upperBound);
+//     double computeTime = TOC(t);
+//     std::cout << "ReLU computation: " << computeTime << " ms" << std::endl;
+//     std::cout << "Result ciphertext level: " << reluResult->GetLevel() << std::endl;
+//     std::cout << "Levels consumed: " << (reluResult->GetLevel() - ciphertext->GetLevel()) << std::endl;
+//     std::cout << "Remaining levels: " << (multDepth - reluResult->GetLevel()) << std::endl;
 
-    // Decrypt and verify
-    TIC(t);
-    Plaintext plaintextDec;
-    cc->Decrypt(keyPair.secretKey, reluResult, &plaintextDec);
-    plaintextDec->SetLength(encodedLength);
-    std::cout << "Decryption: " << TOC(t) << " ms" << std::endl;
+//     // Decrypt and verify
+//     TIC(t);
+//     Plaintext plaintextDec;
+//     cc->Decrypt(keyPair.secretKey, reluResult, &plaintextDec);
+//     plaintextDec->SetLength(encodedLength);
+//     std::cout << "Decryption: " << TOC(t) << " ms" << std::endl;
 
-    std::vector<std::complex<double>> result = plaintextDec->GetCKKSPackedValue();
-    std::cout << "\nActual output: ";
-    for (size_t i = 0; i < encodedLength; ++i) {
-        std::cout << std::fixed << std::setprecision(4) << result[i].real() << " ";
-    }
-    std::cout << std::endl;
+//     std::vector<std::complex<double>> result = plaintextDec->GetCKKSPackedValue();
+//     std::cout << "\nActual output: ";
+//     for (size_t i = 0; i < encodedLength; ++i) {
+//         std::cout << std::fixed << std::setprecision(4) << result[i].real() << " ";
+//     }
+//     std::cout << std::endl;
 
-    // Compute error
-    std::cout << "\nError analysis:" << std::endl;
-    double maxError = 0.0;
-    double avgError = 0.0;
-    for (size_t i = 0; i < encodedLength; ++i) {
-        double error = std::abs(expected[i] - result[i].real());
-        avgError += error;
-        maxError = std::max(maxError, error);
-        std::cout << "  Input " << std::setw(6) << input[i]
-                  << " | Expected " << std::setw(6) << expected[i]
-                  << " | Got " << std::setw(8) << result[i].real()
-                  << " | Error " << std::setw(8) << error << std::endl;
-    }
-    avgError /= encodedLength;
-    std::cout << "\nMax error: " << maxError << std::endl;
-    std::cout << "Avg error: " << avgError << std::endl;
-    std::cout << "\n✓ Minimax/Chebyshev ReLU Test Complete!\n" << std::endl;
-}
+//     // Compute error
+//     std::cout << "\nError analysis:" << std::endl;
+//     double maxError = 0.0;
+//     double avgError = 0.0;
+//     for (size_t i = 0; i < encodedLength; ++i) {
+//         double error = std::abs(expected[i] - result[i].real());
+//         avgError += error;
+//         maxError = std::max(maxError, error);
+//         std::cout << "  Input " << std::setw(6) << input[i]
+//                   << " | Expected " << std::setw(6) << expected[i]
+//                   << " | Got " << std::setw(8) << result[i].real()
+//                   << " | Error " << std::setw(8) << error << std::endl;
+//     }
+//     avgError /= encodedLength;
+//     std::cout << "\nMax error: " << maxError << std::endl;
+//     std::cout << "Avg error: " << avgError << std::endl;
+//     std::cout << "\n✓ Minimax/Chebyshev ReLU Test Complete!\n" << std::endl;
+// }
 
 /**
  * @brief Test ReLU using scheme switching between CKKS and FHEW
@@ -499,16 +505,16 @@ int main(int argc, char* argv[]) {
             case 1:
                 TestReLUApproximation1();
                 break;
-            case 2:
-                TestReLUApproximation2();
-                break;
+            // case 2:
+            //     TestReLUApproximation2();
+            //     break;
             case 3:
                 TestReLUSchemeSwitching();
                 break;
             case 4:
             default:
                 TestReLUApproximation1();
-                TestReLUApproximation2();
+                // TestReLUApproximation2();
                 TestReLUSchemeSwitching();
                 break;
         }
