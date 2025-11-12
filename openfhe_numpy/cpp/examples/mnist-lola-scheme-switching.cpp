@@ -23,7 +23,7 @@ using namespace lbcrypto;
  
 // ========== DEBUG MODE ==========
 // Set to true to decrypt and print intermediate values after each layer
-constexpr bool DEBUG_MODE = true;
+constexpr bool DEBUG_MODE = false;
 
 /**
  * @brief MNIST LoLa Network Architecture (Scheme Switching for ReLU)
@@ -142,19 +142,6 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     auto ctReLU = cc->EvalMult(ct, cc->EvalAdd(cc->EvalMult(ctComparison, -1), 1));
 
     return ctReLU;
-}
-
-/**
- * @brief Perform dense (fully connected) layer using diagonal method
- * Using PLAINTEXT weights (not encrypted) to save memory
- */
-Ciphertext<DCRTPoly> EvalDenseLayer(
-    CryptoContext<DCRTPoly>& cc,
-    const Ciphertext<DCRTPoly>& ctInput,
-    const std::vector<Plaintext>& ptWeightDiags,
-    std::vector<int32_t>& rotationIndices
-) {
-    return EvalMultMatVecDiag(ctInput, ptWeightDiags, rotationIndices);
 }
 
 void MNISTLoLaInference() {
@@ -343,22 +330,22 @@ void MNISTLoLaInference() {
     // Convolution layer
     TIC(t);
     auto toeplitzConv = ConstructConv2DToeplitz(convKernel, 28, 28, convStride, convPadding, 1, 1, 1, 1);
-    std::size_t convRows = toeplitzConv.size();
     std::vector<std::vector<double>> convDiagonals = PackMatDiagWise(toeplitzConv, batchSize);
-    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals);
-    std::cout << "  Conv Toeplitz: " << convRows << " rows, "
+    std::size_t convCols = convDiagonals.size();
+    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, true);
+    std::cout << "  Conv Toeplitz: " << convCols << " rows, "
               << convRotations.size() << " non-zero diagonals" << std::endl;
 
     // Dense layer 1
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1Weights, batchSize);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals);
-    std::size_t dense1Rows = dense1Weights.size();
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, true);
+    std::size_t dense1Cols = dense1Diagonals.size();
     std::cout << "  Dense1: " << dense1Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Dense layer 2
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals);
-    std::size_t dense2Rows = dense2Weights.size();
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, true);
+    std::size_t dense2Cols = dense2Diagonals.size();
     std::cout << "  Dense2: " << dense2Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Collect all rotation indices (one key per index for faster inference)
@@ -366,9 +353,6 @@ void MNISTLoLaInference() {
     allRotations.insert(allRotations.end(), convRotations.begin(), convRotations.end());
     allRotations.insert(allRotations.end(), dense1Rotations.begin(), dense1Rotations.end());
     allRotations.insert(allRotations.end(), dense2Rotations.begin(), dense2Rotations.end());
-    allRotations.push_back(-convRows);
-    allRotations.push_back(-dense1Rows);
-    allRotations.push_back(-dense2Rows);
 
     // Remove duplicates
     std::sort(allRotations.begin(), allRotations.end());
@@ -406,8 +390,8 @@ void MNISTLoLaInference() {
     // Layer 1: Convolution
     std::cout << "\n[Layer 1] Convolution (28x28x1 -> 12x12x5)..." << std::endl;
     TIC(t);
-    // cc->EvalAddInPlace(ctInput, cc->EvalRotate(ctInput, -784));
-    auto ctConvOut = EvalMultMatVecDiag(ctInput, ptConvDiags, convRotations);
+    // cc->EvalAddInPlace(ctInput, cc->EvalRotate(ctInput, -convCols));
+    auto ctConvOut = EvalMultMatVecDiag(ctInput, ptConvDiags, 2, convRotations);
     double convTime = TOC(t);
     std::cout << "  Time: " << convTime << " ms" << std::endl;
     std::cout << "  Level: " << ctConvOut->GetLevel() << std::endl;
@@ -425,8 +409,8 @@ void MNISTLoLaInference() {
     // Layer 3: Dense 1 (720 -> 64)
     std::cout << "\n[Layer 3] Dense1 (720 -> 64)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -convRows));
-    auto ctDense1Out = EvalDenseLayer(cc, ctReLU1, ptDense1Diags, dense1Rotations);
+    cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -dense1Cols));
+    auto ctDense1Out = EvalMultMatVecDiag(ctReLU1, ptDense1Diags, 2, dense1Rotations);
     double dense1Time = TOC(t);
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense1Out->GetLevel() << std::endl;
@@ -444,8 +428,8 @@ void MNISTLoLaInference() {
     // Layer 5: Dense 2 (64 -> 10)
     std::cout << "\n[Layer 5] Dense2 (64 -> 10)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -dense1Rows));
-    auto ctOutput = EvalDenseLayer(cc, ctReLU2, ptDense2Diags, dense2Rotations);
+    cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -dense2Cols));
+    auto ctOutput = EvalMultMatVecDiag(ctReLU2, ptDense2Diags, 2, dense2Rotations);
     double dense2Time = TOC(t);
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctOutput->GetLevel() << std::endl;

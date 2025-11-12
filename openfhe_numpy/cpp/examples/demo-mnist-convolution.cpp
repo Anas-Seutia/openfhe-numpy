@@ -69,7 +69,7 @@ void RunMNISTConvolution(const std::vector<std::vector<double>>& inputImage,
     // Compute
     TIC(t);
     // auto ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
-    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
     std::cout << "Computation: " << TOC(t) << " ms\n";
 
     // Decrypt

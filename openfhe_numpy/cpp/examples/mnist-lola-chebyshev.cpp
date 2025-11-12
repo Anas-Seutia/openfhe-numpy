@@ -107,7 +107,7 @@ Ciphertext<DCRTPoly> EvalDenseLayer(
     const std::vector<Plaintext>& ptWeightDiags,
     std::vector<int32_t>& rotationIndices
 ) {
-    return EvalMultMatVecDiag(ctInput, ptWeightDiags, rotationIndices);
+    return EvalMultMatVecDiag(ctInput, ptWeightDiags, 1, rotationIndices);
 } 
 
 void MNISTLoLaInference() {
@@ -334,7 +334,7 @@ void MNISTLoLaInference() {
     // Layer 1: Convolution
     std::cout << "\n[Layer 1] Convolution (28x28x1 -> 12x12x5)..." << std::endl;
     TIC(t);
-    auto ctConvOut = EvalMultMatVecDiag(ctInput, ptConvDiags, convRotations);
+    auto ctConvOut = EvalMultMatVecDiag(ctInput, ptConvDiags, 1, convRotations);
     double convTime = TOC(t);
     std::cout << "  Time: " << convTime << " ms" << std::endl;
     std::cout << "  Level: " << ctConvOut->GetLevel() << std::endl;

@@ -296,7 +296,7 @@ void TestTwoLayerDense() {
     // Layer 1: Dense1
     std::cout << "\n[Layer 1] Dense1 (" << inputSize << " -> " << hidden1Size << ")" << std::endl;
     cc->EvalAddInPlace(ctInput, cc->EvalRotate(ctInput, -inputSize));
-    auto ctDense1Out = EvalMultMatVecDiag(ctInput, ptDense1Diags, dense1Rotations);
+    auto ctDense1Out = EvalMultMatVecDiag(ctInput, ptDense1Diags, 1, dense1Rotations);
     std::cout << "  Level: " << ctDense1Out->GetLevel() << std::endl;
     PrintDebugValuesCT(cc, ctDense1Out, keyPair.secretKey, "Dense1 output", 10, hidden1Size);
 
@@ -326,7 +326,7 @@ void TestTwoLayerDense() {
     std::cout << "  Applying folding: EvalAdd(ct, EvalRotate(ct, -" << dense1Rows << "))" << std::endl;
     cc->EvalAddInPlace(ctRelu1, cc->EvalRotate(ctRelu1, -dense1Rows));
 
-    auto ctDense2Out = EvalMultMatVecDiag(ctRelu1, ptDense2Diags, dense2Rotations);
+    auto ctDense2Out = EvalMultMatVecDiag(ctRelu1, ptDense2Diags, 1, dense2Rotations);
     std::cout << "  Level: " << ctDense2Out->GetLevel() << std::endl;
     PrintDebugValuesCT(cc, ctDense2Out, keyPair.secretKey, "Dense2 output", outputSize, outputSize);  // Show all values
 

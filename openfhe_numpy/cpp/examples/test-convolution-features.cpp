@@ -191,7 +191,7 @@ void Test5x5Kernel() {
     auto ctVec = cc->Encrypt(keyPair.publicKey, ptVec);
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
 
-    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
 
     Plaintext ptResult;
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);
@@ -275,7 +275,7 @@ void TestMultipleOutputChannels() {
     auto ctVec = cc->Encrypt(keyPair.publicKey, ptVec);
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
 
-    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
 
     Plaintext ptResult;
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);
@@ -393,7 +393,7 @@ void TestMultipleInputChannels() {
     auto ctVec = cc->Encrypt(keyPair.publicKey, ptVec);
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
 
-    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
 
     Plaintext ptResult;
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);
@@ -507,7 +507,7 @@ void TestBothFeatures() {
     auto ctVec = cc->Encrypt(keyPair.publicKey, ptVec);
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
 
-    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    auto ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
 
     Plaintext ptResult;
     cc->Decrypt(keyPair.secretKey, ctResult, &ptResult);

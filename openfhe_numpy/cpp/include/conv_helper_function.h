@@ -26,9 +26,11 @@ std::vector<std::vector<T>> PackMatDiagWise(
  * @brief Get a list of non-zero diagonals in a matrix
  * 
  * @param matrix Input diagonals (D x W)
+ * @param BSGSmode get BSGS rotation
+ * @param babyStep babyStep for BSGS, Default: sqrt(D)
  * @return List of non-zero diagonal indices
  */
-std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix);
+std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix, bool BSGSmode = false, uint32_t babyStep = 0);
 
 /**
  * @brief Structure to hold diagonalization results
@@ -92,14 +94,19 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
 *
 * @param ctVector  The ciphertext encoding the input encrypted vector
 * @param diagonals  The ciphertext encoding the input plaintext/encrypted diagonals
-* @param Rotations List of rotations for non-zero optimisations
+* @param optimizationMode 0 = non-zero, 1 = hoisting, 2 = BSGS + hoisting, default: 1
+* @param rotations List of rotations for non-zero optimisations for optimizationMode 0 and 1
+* @param babyStep baby step split for optimizationMode 2, default: sqrt(rotations)
 *
 * @return The ciphertext resulting from the matrix-vector product.
 */
 template <typename T>
-Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
+Ciphertext<DCRTPoly> EvalMultMatVecDiag(
+    const Ciphertext<DCRTPoly>& ctVector,
     const std::vector<T>& diagonals,
-    std::vector<int32_t>& rotations = {}
+    uint32_t optimizationMode = 1,
+    std::vector<int32_t>& rotations = {},
+    uint32_t babyStep = 0
 );
 
 /**

@@ -23,7 +23,7 @@ using namespace lbcrypto;
 
 // ========== DEBUG MODE ==========
 // Set to true to decrypt and print intermediate values after each layer
-constexpr bool DEBUG_MODE = true;
+constexpr bool DEBUG_MODE = false;
 
 /**
  * @brief MNIST LeNet-5 Network Architecture (Scheme Switching for ReLU)
@@ -150,19 +150,6 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     return ctReLU;
 }
 
-/**
- * @brief Perform dense (fully connected) layer using diagonal method
- * Using PLAINTEXT weights (not encrypted) to save memory
- */
-Ciphertext<DCRTPoly> EvalDenseLayer(
-    CryptoContext<DCRTPoly>& cc,
-    const Ciphertext<DCRTPoly>& ctInput,
-    const std::vector<Plaintext>& ptWeightDiags,
-    std::vector<int32_t>& rotationIndices
-) {
-    return EvalMultMatVecDiag(ctInput, ptWeightDiags, rotationIndices);
-}
-
 void MNISTLeNet5Inference() {
     std::cout << "\n" << std::string(80, '=') << std::endl;
     std::cout << "  MNIST LeNet-5 Network Inference (Scheme Switching)" << std::endl;
@@ -275,7 +262,7 @@ void MNISTLeNet5Inference() {
     params.SetSecurityLevelFHEW(slBin);
     params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
     params.SetNumSlotsCKKS(slots);
-    params.SetNumValues(864);  // Max(24*24*6=3456, 12*12*6=864, 8*8*16=1024, 256, 120, 84)
+    params.SetNumValues(3456);  // Max(24*24*6=3456, 12*12*6=864, 8*8*16=1024, 256, 120, 84)
 
     auto privateKeyFHEW = cc->EvalSchemeSwitchingSetup(params);
     auto ccLWE = cc->GetBinCCForSchemeSwitch();
@@ -314,10 +301,10 @@ void MNISTLeNet5Inference() {
     PrintKernelDebug(conv1Kernel, "Conv1 kernel");
 
     // AvgPool1: 2x2, stride=2 (implemented as Conv 6->6, 2x2, stride=2)
-    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool1Kernel(6);
-    for (int oc = 0; oc < 6; oc++) {
-        avgpool1Kernel[oc].resize(6);
-        for (int ic = 0; ic < 6; ic++) {
+    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool1Kernel(1);
+    for (int oc = 0; oc < 1; oc++) {
+        avgpool1Kernel[oc].resize(1);
+        for (int ic = 0; ic < 1; ic++) {
             avgpool1Kernel[oc][ic].resize(2, std::vector<double>(2, 0.0));
             if (oc == ic) {  // Identity mapping for each channel
                 for (int i = 0; i < 2; i++) {
@@ -357,10 +344,10 @@ void MNISTLeNet5Inference() {
     PrintKernelDebug(conv2Kernel, "Conv2 kernel");
 
     // AvgPool2: 2x2, stride=2 (implemented as Conv 16->16, 2x2, stride=2)
-    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool2Kernel(16);
-    for (int oc = 0; oc < 16; oc++) {
-        avgpool2Kernel[oc].resize(16);
-        for (int ic = 0; ic < 16; ic++) {
+    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool2Kernel(1);
+    for (int oc = 0; oc < 1; oc++) {
+        avgpool2Kernel[oc].resize(1);
+        for (int ic = 0; ic < 1; ic++) {
             avgpool2Kernel[oc][ic].resize(2, std::vector<double>(2, 0.0));
             if (oc == ic) {
                 for (int i = 0; i < 2; i++) {
@@ -418,50 +405,50 @@ void MNISTLeNet5Inference() {
 
     // Conv1 Toeplitz
     auto toeplitzConv1 = ConstructConv2DToeplitz(conv1Kernel, 28, 28, 1, 0, 1, 1, 1, 1);
-    std::size_t conv1Rows = toeplitzConv1.size();
     std::vector<std::vector<double>> conv1Diagonals = PackMatDiagWise(toeplitzConv1, batchSize);
-    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals);
-    std::cout << "  Conv1 Toeplitz: " << conv1Rows << " rows, "
+    std::size_t conv1Cols = conv1Diagonals.size();
+    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, true);
+    std::cout << "  Conv1 Toeplitz: " << conv1Cols << " rows, "
               << conv1Rotations.size() << " non-zero diagonals" << std::endl;
 
     // AvgPool1 Toeplitz
     auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, 24, 24, 2, 0, 1, 1, 1, 1);
-    std::size_t pool1Rows = toeplitzPool1.size();
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
-    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals);
-    std::cout << "  AvgPool1 Toeplitz: " << pool1Rows << " rows, "
+    std::size_t pool1Cols = pool1Diagonals.size();
+    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, true);
+    std::cout << "  AvgPool1 Toeplitz: " << pool1Cols << " rows, "
               << pool1Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Conv2 Toeplitz
     auto toeplitzConv2 = ConstructConv2DToeplitz(conv2Kernel, 12, 12, 1, 0, 1, 1, 1, 1);
-    std::size_t conv2Rows = toeplitzConv2.size();
     std::vector<std::vector<double>> conv2Diagonals = PackMatDiagWise(toeplitzConv2, batchSize);
-    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals);
-    std::cout << "  Conv2 Toeplitz: " << conv2Rows << " rows, "
+    std::size_t conv2Cols = conv2Diagonals.size();
+    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, true);
+    std::cout << "  Conv2 Toeplitz: " << conv2Cols << " rows, "
               << conv2Rotations.size() << " non-zero diagonals" << std::endl;
 
     // AvgPool2 Toeplitz
     auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, 8, 8, 2, 0, 1, 1, 1, 1);
-    std::size_t pool2Rows = toeplitzPool2.size();
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
-    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals);
-    std::cout << "  AvgPool2 Toeplitz: " << pool2Rows << " rows, "
+    std::size_t pool2Cols = pool2Diagonals.size();
+    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, true);
+    std::cout << "  AvgPool2 Toeplitz: " << pool2Cols << " rows, "
               << pool2Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Dense layers
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1Weights, batchSize);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals);
-    std::size_t dense1Rows = dense1Weights.size();
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, true);
+    std::size_t dense1Cols = dense1Diagonals.size();
     std::cout << "  Dense1: " << dense1Rotations.size() << " non-zero diagonals" << std::endl;
 
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals);
-    std::size_t dense2Rows = dense2Weights.size();
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, true);
+    std::size_t dense2Cols = dense2Diagonals.size();
     std::cout << "  Dense2: " << dense2Rotations.size() << " non-zero diagonals" << std::endl;
 
     std::vector<std::vector<double>> dense3Diagonals = PackMatDiagWise(dense3Weights, batchSize);
-    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals);
-    std::size_t dense3Rows = dense3Weights.size();
+    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, true);
+    std::size_t dense3Cols = dense3Diagonals.size();
     std::cout << "  Dense3: " << dense3Rotations.size() << " non-zero diagonals" << std::endl;
 
     // Collect all rotation indices
@@ -473,13 +460,6 @@ void MNISTLeNet5Inference() {
     allRotations.insert(allRotations.end(), dense1Rotations.begin(), dense1Rotations.end());
     allRotations.insert(allRotations.end(), dense2Rotations.begin(), dense2Rotations.end());
     allRotations.insert(allRotations.end(), dense3Rotations.begin(), dense3Rotations.end());
-    allRotations.push_back(-static_cast<int32_t>(conv1Rows));
-    allRotations.push_back(-static_cast<int32_t>(pool1Rows));
-    allRotations.push_back(-static_cast<int32_t>(conv2Rows));
-    allRotations.push_back(-static_cast<int32_t>(pool2Rows));
-    allRotations.push_back(-static_cast<int32_t>(dense1Rows));
-    allRotations.push_back(-static_cast<int32_t>(dense2Rows));
-    allRotations.push_back(-static_cast<int32_t>(dense3Rows));
 
     // Remove duplicates
     std::sort(allRotations.begin(), allRotations.end());
@@ -518,7 +498,8 @@ void MNISTLeNet5Inference() {
     // Layer 1: Conv1
     std::cout << "\n[Layer 1] Conv1 (28x28x1 -> 24x24x6)..." << std::endl;
     TIC(t);
-    auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, conv1Rotations);
+    cc->EvalAddInPlace(ctInput, cc->EvalRotate(ctInput, -conv1Cols));
+    auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, 2, conv1Rotations);
     double conv1Time = TOC(t);
     std::cout << "  Time: " << conv1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv1->GetLevel() << std::endl;
@@ -536,8 +517,8 @@ void MNISTLeNet5Inference() {
     // Layer 3: AvgPool1
     std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -static_cast<int32_t>(conv1Rows)));
-    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, ptPool1Diags, pool1Rotations);
+    cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -pool1Cols));
+    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, ptPool1Diags, 2, pool1Rotations);
     double pool1Time = TOC(t);
     std::cout << "  Time: " << pool1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool1->GetLevel() << std::endl;
@@ -546,8 +527,8 @@ void MNISTLeNet5Inference() {
     // Layer 4: Conv2
     std::cout << "\n[Layer 4] Conv2 (12x12x6 -> 8x8x16)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -static_cast<int32_t>(pool1Rows)));
-    auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, conv2Rotations);
+    cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
+    auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, 2, conv2Rotations);
     double conv2Time = TOC(t);
     std::cout << "  Time: " << conv2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv2->GetLevel() << std::endl;
@@ -565,8 +546,8 @@ void MNISTLeNet5Inference() {
     // Layer 6: AvgPool2
     std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -static_cast<int32_t>(conv2Rows)));
-    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, ptPool2Diags, pool2Rotations);
+    cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -pool2Cols));
+    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, ptPool2Diags, 2, pool2Rotations);
     double pool2Time = TOC(t);
     std::cout << "  Time: " << pool2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool2->GetLevel() << std::endl;
@@ -575,8 +556,8 @@ void MNISTLeNet5Inference() {
     // Layer 7: Dense1
     std::cout << "\n[Layer 7] Dense1 (256 -> 120)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -static_cast<int32_t>(pool2Rows)));
-    auto ctDense1 = EvalDenseLayer(cc, ctPool2, ptDense1Diags, dense1Rotations);
+    cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
+    auto ctDense1 = EvalMultMatVecDiag(ctPool2, ptDense1Diags, 2, dense1Rotations);
     double dense1Time = TOC(t);
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense1->GetLevel() << std::endl;
@@ -594,8 +575,8 @@ void MNISTLeNet5Inference() {
     // Layer 9: Dense2
     std::cout << "\n[Layer 9] Dense2 (120 -> 84)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -static_cast<int32_t>(dense1Rows)));
-    auto ctDense2 = EvalDenseLayer(cc, ctReLU3, ptDense2Diags, dense2Rotations);
+    cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
+    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, ptDense2Diags, 2, dense2Rotations);
     double dense2Time = TOC(t);
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense2->GetLevel() << std::endl;
@@ -613,8 +594,8 @@ void MNISTLeNet5Inference() {
     // Layer 11: Dense3
     std::cout << "\n[Layer 11] Dense3 (84 -> 10)..." << std::endl;
     TIC(t);
-    cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -static_cast<int32_t>(dense2Rows)));
-    auto ctOutput = EvalDenseLayer(cc, ctReLU4, ptDense3Diags, dense3Rotations);
+    cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
+    auto ctOutput = EvalMultMatVecDiag(ctReLU4, ptDense3Diags, 2, dense3Rotations);
     double dense3Time = TOC(t);
     std::cout << "  Time: " << dense3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctOutput->GetLevel() << std::endl;

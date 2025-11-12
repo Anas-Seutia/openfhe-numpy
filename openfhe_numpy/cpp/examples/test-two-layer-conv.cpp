@@ -266,7 +266,7 @@ void TestTwoLayerConvolution() {
 
     // Execute Layer 1
     std::cout << "\n--- Executing FHE Layer 1 ---\n";
-    auto ctResult1 = EvalMultMatVecDiag(ctVec1, ctDiags1, rotationIndices1);
+    auto ctResult1 = EvalMultMatVecDiag(ctVec1, ctDiags1, 1, rotationIndices1);
 
     Plaintext ptResult1;
     cc->Decrypt(keyPair.secretKey, ctResult1, &ptResult1);
@@ -279,7 +279,7 @@ void TestTwoLayerConvolution() {
     // Execute Layer 2 - using Layer 1 output as input
     std::cout << "\n--- Executing FHE Layer 2 ---\n";
     cc->EvalAddInPlace(ctResult1, cc->EvalRotate(ctResult1,-nRows1));
-    auto ctResult2 = EvalMultMatVecDiag(ctResult1, ctDiags2, rotationIndices2);
+    auto ctResult2 = EvalMultMatVecDiag(ctResult1, ctDiags2, 1, rotationIndices2);
 
     Plaintext ptResult2;
     cc->Decrypt(keyPair.secretKey, ctResult2, &ptResult2);

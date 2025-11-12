@@ -194,7 +194,7 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     TIC(t_mult);
     
     // Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
-    Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ctDiags, rotationIndices);
+    Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
     
     double time_mult = TOC(t_mult);
     std::cout << "Homomorphic multiplication time: " << time_mult << " ms" << std::endl;
