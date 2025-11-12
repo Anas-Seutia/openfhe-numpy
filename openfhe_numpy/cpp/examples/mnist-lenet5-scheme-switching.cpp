@@ -301,10 +301,10 @@ void MNISTLeNet5Inference() {
     PrintKernelDebug(conv1Kernel, "Conv1 kernel");
 
     // AvgPool1: 2x2, stride=2 (implemented as Conv 6->6, 2x2, stride=2)
-    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool1Kernel(1);
-    for (int oc = 0; oc < 1; oc++) {
-        avgpool1Kernel[oc].resize(1);
-        for (int ic = 0; ic < 1; ic++) {
+    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool1Kernel(6);
+    for (int oc = 0; oc < 6; oc++) {
+        avgpool1Kernel[oc].resize(6);
+        for (int ic = 0; ic < 6; ic++) {
             avgpool1Kernel[oc][ic].resize(2, std::vector<double>(2, 0.0));
             if (oc == ic) {  // Identity mapping for each channel
                 for (int i = 0; i < 2; i++) {
@@ -344,10 +344,10 @@ void MNISTLeNet5Inference() {
     PrintKernelDebug(conv2Kernel, "Conv2 kernel");
 
     // AvgPool2: 2x2, stride=2 (implemented as Conv 16->16, 2x2, stride=2)
-    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool2Kernel(1);
-    for (int oc = 0; oc < 1; oc++) {
-        avgpool2Kernel[oc].resize(1);
-        for (int ic = 0; ic < 1; ic++) {
+    std::vector<std::vector<std::vector<std::vector<double>>>> avgpool2Kernel(6);
+    for (int oc = 0; oc < 6; oc++) {
+        avgpool2Kernel[oc].resize(6);
+        for (int ic = 0; ic < 6; ic++) {
             avgpool2Kernel[oc][ic].resize(2, std::vector<double>(2, 0.0));
             if (oc == ic) {
                 for (int i = 0; i < 2; i++) {
