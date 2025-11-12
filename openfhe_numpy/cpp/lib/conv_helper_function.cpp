@@ -72,7 +72,6 @@ std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matr
             for (uint32_t diag_idx = babyStep; diag_idx < matrix_height; diag_idx+=babyStep) {
                 rotations.push_back(diag_idx);
             }
-            rotations.push_back((int32_t)matrix_height * -1);
             break;
         }
         case false: {
@@ -93,6 +92,7 @@ std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matr
         }
     }
 
+    rotations.push_back((int32_t)matrix_height * -1);
 
     return rotations;
 }
@@ -510,6 +510,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
             uint32_t M = 2 * cryptoContext->GetRingDimension();
             auto precomp = cryptoContext->EvalFastRotationPrecompute(ctVector);
             for (const int32_t rotation : rotations) {
+                if (rotation < 0) break;
                 ctRotated = cryptoContext->EvalFastRotation(ctVector, rotation, M, precomp);
                 ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
                 if (first) {
