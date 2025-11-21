@@ -50,7 +50,7 @@ void RunMNISTConvolution(const std::vector<std::vector<double>>& inputImage,
     cc->EvalMultKeyGen(keyPair.secretKey);
 
     auto toeplitzMatrix = ConstructConv2DToeplitz(kernel, input_height, input_width,
-                                                   stride, padding, 1, 1, 1, 1);
+                                                   stride, padding, 1, 1, 1);
     auto diagonals = PackMatDiagWise(toeplitzMatrix, batchSize);
     auto rotationIndices = getOptimalRots(diagonals);
     cc->EvalRotateKeyGen(keyPair.secretKey, rotationIndices);

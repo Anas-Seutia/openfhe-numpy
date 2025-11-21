@@ -115,18 +115,19 @@ std::vector<std::vector<double>> DiagonalConv_Packing(
     const std::vector<std::vector<double>> matrix,
     const std::size_t &num_slots
 ) {
-    std::cout << "enay" << std::endl;
     std::vector<std::vector<double>> diagonalized = PackMatDiagWise(matrix, num_slots);
     std::vector<int32_t> nonZeroDiagonals = getOptimalRots(diagonalized);
 
-
+    int count = 0;
     for (const int32_t diag_idx : nonZeroDiagonals) {
-        std::cout << "  Diagonal " << diag_idx << " (first 10 values): [";
+        if (diag_idx < 0) continue;
+        std::cout << "  Diagonal " << count << " (first 10 values): [";
         for (size_t i = 0; i < std::min(size_t(10), diagonalized[diag_idx].size()); ++i) {
             std::cout << std::fixed << std::setprecision(1) << diagonalized[diag_idx][i];
             if (i < std::min(size_t(10), diagonalized[diag_idx].size()) - 1) std::cout << ", ";
         }
         std::cout << "]" << std::endl;
+        count++;
     }
     return diagonalized;
 }
@@ -227,47 +228,158 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<std::vector<std::vector<double>>>> inputKernel = {
         {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1, 3, 3},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
             }
         },
-                {  // Output channel 0
+        {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1, 3, 3},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
             }
         },
-                {  // Output channel 0
+        {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1, 3, 3},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
             }
         },
-                {  // Output channel 0
+        {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1, 3, 3},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
             }
         },
-                {  // Output channel 0
+        {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1, 3, 3},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
-                {3, 5, 6, 2, 7},
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            }
+        },
+        {  // Output channel 0
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
+            },
+            {  // Input channel 0
+                {1, 1},
+                {1, 1},
             }
         }
     };
@@ -281,14 +393,13 @@ int main(int argc, char* argv[]) {
                                                         {2,  5,  0,  2,  8,  8,  5,  9},
                                                         {5,  1,  10, 6,  2,  8,  6,  3}};
 
-    uint32_t input_height = 28;
-    uint32_t input_width = 28;
+    uint32_t input_height = 24;
+    uint32_t input_width = 24;
     uint32_t stride = 2;
     uint32_t padding = 0;
     uint32_t dilation = 1;
-    uint32_t batch_size = 1;
     uint32_t input_gap = 1;
-    uint32_t output_gap = 1;
+    uint32_t output_gap = 2;
 
     /** result: [[85. 107. 149. 203.  84.  90.]
      *          [ 66.  60.  59. 204. 118.  89.]
@@ -313,13 +424,13 @@ int main(int argc, char* argv[]) {
 
     switch (choice) {
         case 1:
-            PrintMatrix(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap));
+            PrintMatrix(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap));
             break;
         case 2:
-            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), 64*2*2*2*2*2);
+            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), 64*2*2*2*2*2*2);
             break;
         case 3:
-            MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));
+            MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));
             std::cout << std::endl << "--- Cleartext Computation Result ---" << std::endl;
             PrintMatrix(NaiveConv2D(input2DMatrix, inputKernel, stride, padding, dilation));
             break;

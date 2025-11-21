@@ -68,7 +68,6 @@ DiagonalResult<T> PackBlockMatDiagWise(
  * @param stride Stride (assumes square stride)
  * @param padding Padding (assumes square padding)
  * @param dilation Dilation (assumes square dilation)
- * @param batch_size Batch size (N)
  * @param input_gap Multiplexing gap for input (iG)
  * @param output_gap Multiplexing gap for output (oG)
  * @return Toeplitz matrix representation as 2D vector
@@ -81,9 +80,31 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
-    const uint32_t &batch_size,
     const uint32_t &input_gap,
     const uint32_t &output_gap
+);
+
+/**
+ * @brief Multiplex a dense layer weight matrix for channel-to-spatial packing
+ *
+ * @param matrix Input weight matrix (out_features x in_features)
+ * @param input_height Logical input height (Hi)
+ * @param input_width Logical input width (Wi)
+ * @param input_gap Multiplexing gap for input (iG)
+ * @param output_height Logical output height (Ho)
+ * @param output_width Logical output width (Wo)
+ * @param output_gap Multiplexing gap for output (oG)
+ * @return Multiplexed weight matrix with reordered rows and columns
+ */
+template <typename T>
+std::vector<std::vector<T>> MultiplexDenseMatrix(
+    const std::vector<std::vector<T>>& matrix,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const uint32_t input_gap,
+    const uint32_t output_height,
+    const uint32_t output_width,
+    const uint32_t output_gap
 );
 
 /**

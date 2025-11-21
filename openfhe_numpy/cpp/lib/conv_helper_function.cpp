@@ -268,7 +268,6 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
-    const uint32_t &batch_size,
     const uint32_t &input_gap,
     const uint32_t &output_gap) {
 
@@ -279,38 +278,40 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     
     // Compute output dimensions after convolution
     uint32_t output_height, output_width;
-    output_height = (input_height + 2*padding - 
+    output_height = (input_height + 2*padding -
                     dilation*(kernel_height-1) - 1) / stride + 1;
-    output_width = (input_width + 2*padding - 
+    output_width = (input_width + 2*padding -
                     dilation*(kernel_width-1) - 1) / stride + 1;
     
-    // Compute FHE output dimensions with multiplexing
-    uint32_t ctx_input_channel = std::ceil((double)in_channels / 
-                               (input_gap * input_gap));
-    uint32_t ctx_output_channel, ctx_output_height, ctx_output_width;
-    ctx_output_channel = std::ceil((double)out_channels / (output_gap * output_gap));
-    ctx_output_height = output_height * output_gap;
-    ctx_output_width = output_width * output_gap;
-    
-    // Padded input dimensions
-    uint32_t input_height_padding = input_height * input_gap + 
-                      2 * padding * input_gap;
-    uint32_t input_width_padding = input_width * input_gap + 
-                      2 * padding * input_gap;
-    
-    // Initialize Toeplitz matrix
-    uint32_t n_rows = ctx_output_channel * ctx_output_height * ctx_output_width;
-    // Note: n_cols computed for reference (not directly used in sparse construction)
-    // uint32_t n_cols = ctx_input_channel * input_height_padding * input_width_padding;
+    // Compute multiplexed input dimensions
+    // With input_gap, input channels are packed into spatial dimensions
+    uint32_t input_gap_squared = input_gap * input_gap;
+    uint32_t super_in_channels = (in_channels + input_gap_squared - 1) / input_gap_squared;  // ceil division
+    uint32_t final_input_height = input_height * input_gap;
+    uint32_t final_input_width = input_width * input_gap;
+
+    // Padded input dimensions (after multiplexing)
+    uint32_t input_height_padding = final_input_height + 2 * padding;
+    uint32_t input_width_padding = final_input_width + 2 * padding;
+
+    // Compute multiplexed output dimensions
+    // With output_gap, we pack output_gap×output_gap channels into spatial dimensions
+    uint32_t output_gap_squared = output_gap * output_gap;
+    uint32_t super_channels = (out_channels + output_gap_squared - 1) / output_gap_squared;  // ceil division
+    uint32_t final_output_height = output_height * output_gap;
+    uint32_t final_output_width = output_width * output_gap;
+
+    // Initialize Toeplitz matrix with multiplexed dimensions
+    uint32_t n_rows = super_channels * final_output_height * final_output_width;
 
     // Using map for sparse representation (row -> col -> value)
     std::map<uint32_t, std::map<uint32_t, T>> sparse_matrix;
     
-    // Create index grid for the padded input image
-    std::vector<std::vector<std::vector<uint32_t>>> valid_image_indices(ctx_input_channel);
+    // Create index grid for the multiplexed padded input image
+    std::vector<std::vector<std::vector<uint32_t>>> valid_image_indices(super_in_channels);
     uint32_t idx = 0;
-        
-    for (uint32_t c = 0; c < ctx_input_channel; ++c) {
+
+    for (uint32_t c = 0; c < super_in_channels; ++c) {
         valid_image_indices[c].resize(input_height_padding);
         for (uint32_t h = 0; h < input_height_padding; ++h) {
             valid_image_indices[c][h].resize(input_width_padding);
@@ -320,131 +321,113 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
         }
     }
     
-    // Pad kernel to match multiplexing requirements
-    uint32_t padded_out_channels = ctx_output_channel * output_gap * output_gap;
-    uint32_t padded_in_channels = ctx_input_channel * input_gap * input_gap;
-    
-    std::vector<std::vector<T>> padded_kernel(
-        padded_out_channels,
-        std::vector<T>(padded_in_channels * kernel_height * kernel_width, 0.0)
+    // Flatten kernel for easier access
+    std::vector<std::vector<T>> flat_kernel(
+        out_channels,
+        std::vector<T>(in_channels * kernel_height * kernel_width, 0.0)
     );
-    
+
     // Copy kernel values
     for (uint32_t co = 0; co < out_channels; ++co) {
         for (uint32_t ci = 0; ci < in_channels; ++ci) {
             for (uint32_t kh = 0; kh < kernel_height; ++kh) {
                 for (uint32_t kw = 0; kw < kernel_width; ++kw) {
-                    uint32_t flat_idx = ci * kernel_height * kernel_width + 
+                    uint32_t flat_idx = ci * kernel_height * kernel_width +
                                        kh * kernel_width + kw;
-                    padded_kernel[co][flat_idx] = kernel[co][ci][kh][kw];
+                    flat_kernel[co][flat_idx] = kernel[co][ci][kh][kw];
                 }
             }
         }
     }
     
     // Compute initial kernel position (which input pixels the kernel initially touches)
+    // Map from logical input channels to multiplexed physical positions
     std::vector<uint32_t> initial_kernel_position;
 
-    // Extract multiplex anchors (top-left iG x iG region) from ALL input channels
-    for (uint32_t c = 0; c < ctx_input_channel; ++c) {
-        for (uint32_t h = 0; h < input_gap; ++h) {
-            for (uint32_t w = 0; w < input_gap; ++w) {
-                uint32_t anchor = valid_image_indices[c][h][w];
+    // For each logical input channel, compute kernel positions
+    for (uint32_t ci = 0; ci < in_channels; ++ci) {
+        // Map logical channel to multiplexed position
+        uint32_t super_ch = ci / input_gap_squared;
+        uint32_t in_block = ci % input_gap_squared;
+        uint32_t block_h = in_block / input_gap;
+        uint32_t block_w = in_block % input_gap;
 
-                // For each anchor, compute all kernel offsets (using channel 0 for spatial offsets)
-                for (uint32_t kh = 0; kh < kernel_height; ++kh) {
-                    for (uint32_t kw = 0; kw < kernel_width; ++kw) {
-                        uint32_t row_idx = kh * dilation * input_gap;
-                        uint32_t col_idx = kw * dilation * input_gap;
-                        uint32_t offset = valid_image_indices[0][row_idx][col_idx];
-                        initial_kernel_position.push_back(anchor + offset);
-                    }
-                }
+        // For each kernel position, compute the physical column index
+        for (uint32_t kh = 0; kh < kernel_height; ++kh) {
+            for (uint32_t kw = 0; kw < kernel_width; ++kw) {
+                // Logical position with dilation
+                uint32_t logical_h = kh * dilation;
+                uint32_t logical_w = kw * dilation;
+
+                // Physical position in multiplexed layout
+                uint32_t physical_h = logical_h * input_gap + block_h;
+                uint32_t physical_w = logical_w * input_gap + block_w;
+
+                initial_kernel_position.push_back(valid_image_indices[super_ch][physical_h][physical_w]);
             }
         }
     }
     
-    // Compute row interchange map for optimal packing     
-    std::vector<std::vector<uint32_t>> row_map;
-    
-    // Create output indices grid
-    std::vector<std::vector<uint32_t>> output_indices(ctx_output_height, std::vector<uint32_t>(ctx_output_width));
-    idx = 0;
-    for (uint32_t h = 0; h < ctx_output_height; ++h) {
-        for (uint32_t w = 0; w < ctx_output_width; ++w) {
-            output_indices[h][w] = idx++;
+    // Compute input starting positions for each output position
+    // Map logical output positions to physical input positions in multiplexed layout
+    std::vector<uint32_t> input_start_indices;
+    for (uint32_t h = 0; h < output_height; ++h) {
+        for (uint32_t w = 0; w < output_width; ++w) {
+            // Logical input position for this output
+            // Physical position in multiplexed layout (channel 0, block position 0,0)
+            uint32_t physical_h = h * stride * input_gap;
+            uint32_t physical_w = w * stride * input_gap;
+            input_start_indices.push_back(valid_image_indices[0][physical_h][physical_w]);
         }
-    }
-    
-    // Extract start indices (top-left output_gap x output_gap region)
-    std::vector<uint32_t> start_indices;
-    for (uint32_t h = 0; h < output_gap; ++h) {
-        for (uint32_t w = 0; w < output_gap; ++w) {
-            start_indices.push_back(output_indices[h][w]);
-        }
-    }
-    
-    // Extract corner indices (strided positions)
-    for (uint32_t h = 0; h < output_height * output_gap; h += output_gap) {
-        for (uint32_t w = 0; w < output_width * output_gap; w += output_gap) {
-            std::vector<uint32_t> positions;
-            uint32_t corner = output_indices[h][w];
-            for (uint32_t start : start_indices) {
-                positions.push_back(corner + start);
-            }
-            row_map.push_back(positions);
-        }
-    }
-    
-    // Compute corner indices for iteration
-    std::vector<uint32_t> corner_indices;  
-    for (uint32_t h = 0; h < output_height * output_gap; h += output_gap) {
-        for (uint32_t w = 0; w < output_width * output_gap; w += output_gap) {
-            corner_indices.push_back(valid_image_indices[0][h*stride][w*stride]);
-        }
-    }
-    
-    // Create output channel offsets
-    std::vector<uint32_t> out_channel_offsets(ctx_output_channel);
-    for (uint32_t co = 0; co < ctx_output_channel; ++co) {
-        out_channel_offsets[co] = co * ctx_output_height * ctx_output_width;
     }
     
     // Populate the Toeplitz matrix
-    for (size_t i = 0; i < corner_indices.size(); ++i) {
-        uint32_t start_idx = corner_indices[i];
-        
-        for (uint32_t co = 0; co < ctx_output_channel; ++co) {
-            for (size_t j = 0; j < row_map[i].size(); ++j) {
-                uint32_t row = row_map[i][j] + out_channel_offsets[co];
-                
+    uint32_t pos_idx = 0;
+    for (uint32_t h = 0; h < output_height; ++h) {
+        for (uint32_t w = 0; w < output_width; ++w) {
+            uint32_t start_idx = input_start_indices[pos_idx];
+
+            for (uint32_t co = 0; co < out_channels; ++co) {
+                // Compute multiplexed row index
+                // Determine which super-channel this output channel belongs to
+                uint32_t super_ch = co / output_gap_squared;
+                uint32_t in_block = co % output_gap_squared;
+
+                // Position within the output_gap × output_gap channel block
+                uint32_t block_h = in_block / output_gap;
+                uint32_t block_w = in_block % output_gap;
+
+                // Final multiplexed position
+                uint32_t final_h = h * output_gap + block_h;
+                uint32_t final_w = w * output_gap + block_w;
+                uint32_t row = super_ch * final_output_height * final_output_width +
+                               final_h * final_output_width + final_w;
+
                 for (size_t k = 0; k < initial_kernel_position.size(); ++k) {
                     uint32_t col = initial_kernel_position[k] + start_idx;
-                    T value = padded_kernel[co * output_gap * output_gap + j][k];
-                    
+                    T value = flat_kernel[co][k];
+
                     if (std::abs(value) > 1e-10) {  // Only store non-zero values
                         sparse_matrix[row][col] = value;
                     }
                 }
             }
+            pos_idx++;
         }
     }
     
-    // Remove padding columns (keep only non-padded input positions)
+    // Remove padding columns (keep only non-padded input positions in multiplexed layout)
     std::vector<uint32_t> image_indices_flat;
-    for (uint32_t c = 0; c < ctx_input_channel; ++c) {
-        for (uint32_t h = padding * input_gap; 
-             h < padding * input_gap + input_height * input_gap; ++h) {
-            for (uint32_t w = padding * input_gap; 
-                 w < padding * input_gap + input_width * input_gap; ++w) {
+    for (uint32_t c = 0; c < super_in_channels; ++c) {
+        for (uint32_t h = padding; h < padding + final_input_height; ++h) {
+            for (uint32_t w = padding; w < padding + final_input_width; ++w) {
                 image_indices_flat.push_back(valid_image_indices[c][h][w]);
             }
         }
     }
-    
-    // Build final dense matrix with unpadded columns
-    uint32_t final_n_cols = ctx_input_channel * input_height * input_gap * 
-                            input_width * input_gap;
+
+    // Build final dense matrix with unpadded columns (multiplexed dimensions)
+    uint32_t final_n_cols = super_in_channels * final_input_height * final_input_width;
     std::vector<std::vector<T>> toeplitz(n_rows, std::vector<T>(final_n_cols, 0.0));
     
     for (const auto& row_entry : sparse_matrix) {
@@ -471,9 +454,120 @@ template std::vector<std::vector<double>> ConstructConv2DToeplitz(
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
-    const uint32_t &batch_size,
     const uint32_t &input_gap,
     const uint32_t &output_gap);
+
+template <typename T>
+std::vector<std::vector<T>> MultiplexDenseMatrix(
+    const std::vector<std::vector<T>>& matrix,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const uint32_t input_gap,
+    const uint32_t output_height,
+    const uint32_t output_width,
+    const uint32_t output_gap) {
+
+    uint32_t out_features = matrix.size();
+    uint32_t in_features = matrix.empty() ? 0 : matrix[0].size();
+
+    // Derive channel counts from features and spatial dimensions
+    uint32_t in_channels = in_features / (input_height * input_width);
+    uint32_t out_channels = out_features / (output_height * output_width);
+
+    // Compute multiplexed dimensions
+    uint32_t input_gap_squared = input_gap * input_gap;
+    uint32_t output_gap_squared = output_gap * output_gap;
+
+    uint32_t super_in_channels = (in_channels + input_gap_squared - 1) / input_gap_squared;
+    uint32_t super_out_channels = (out_channels + output_gap_squared - 1) / output_gap_squared;
+
+    uint32_t final_input_height = input_height * input_gap;
+    uint32_t final_input_width = input_width * input_gap;
+    uint32_t final_output_height = output_height * output_gap;
+    uint32_t final_output_width = output_width * output_gap;
+
+    // Create column mapping: logical input index -> multiplexed input index
+    std::vector<uint32_t> col_mapping(in_features);
+
+    for (uint32_t ci = 0; ci < in_channels; ++ci) {
+        for (uint32_t h = 0; h < input_height; ++h) {
+            for (uint32_t w = 0; w < input_width; ++w) {
+                // Logical flat index (channel-major order)
+                uint32_t logical_idx = ci * input_height * input_width + h * input_width + w;
+
+                // Map to multiplexed position
+                uint32_t super_ch = ci / input_gap_squared;
+                uint32_t in_block = ci % input_gap_squared;
+                uint32_t block_h = in_block / input_gap;
+                uint32_t block_w = in_block % input_gap;
+
+                uint32_t physical_h = h * input_gap + block_h;
+                uint32_t physical_w = w * input_gap + block_w;
+
+                // Multiplexed flat index (channel-major order)
+                uint32_t multiplexed_idx = super_ch * final_input_height * final_input_width +
+                                          physical_h * final_input_width + physical_w;
+
+                col_mapping[logical_idx] = multiplexed_idx;
+            }
+        }
+    }
+
+    // Create row mapping: logical output index -> multiplexed output index
+    std::vector<uint32_t> row_mapping(out_features);
+
+    for (uint32_t co = 0; co < out_channels; ++co) {
+        for (uint32_t h = 0; h < output_height; ++h) {
+            for (uint32_t w = 0; w < output_width; ++w) {
+                // Logical flat index (channel-major order)
+                uint32_t logical_idx = co * output_height * output_width + h * output_width + w;
+
+                // Map to multiplexed position
+                uint32_t super_ch = co / output_gap_squared;
+                uint32_t in_block = co % output_gap_squared;
+                uint32_t block_h = in_block / output_gap;
+                uint32_t block_w = in_block % output_gap;
+
+                uint32_t physical_h = h * output_gap + block_h;
+                uint32_t physical_w = w * output_gap + block_w;
+
+                // Multiplexed flat index (channel-major order)
+                uint32_t multiplexed_idx = super_ch * final_output_height * final_output_width +
+                                          physical_h * final_output_width + physical_w;
+
+                row_mapping[logical_idx] = multiplexed_idx;
+            }
+        }
+    }
+
+    // Create multiplexed matrix with reordered rows and columns
+    uint32_t multiplexed_out_features = super_out_channels * final_output_height * final_output_width;
+    uint32_t multiplexed_in_features = super_in_channels * final_input_height * final_input_width;
+
+    std::vector<std::vector<T>> multiplexed_matrix(
+        multiplexed_out_features,
+        std::vector<T>(multiplexed_in_features, 0.0)
+    );
+
+    // Reorder the matrix
+    for (uint32_t row = 0; row < out_features; ++row) {
+        for (uint32_t col = 0; col < in_features; ++col) {
+            uint32_t new_row = row_mapping[row];
+            uint32_t new_col = col_mapping[col];
+            multiplexed_matrix[new_row][new_col] = matrix[row][col];
+        }
+    }
+
+    return multiplexed_matrix;
+}
+template std::vector<std::vector<double>> MultiplexDenseMatrix(
+    const std::vector<std::vector<double>>& matrix,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const uint32_t input_gap,
+    const uint32_t output_height,
+    const uint32_t output_width,
+    const uint32_t output_gap);
 
 template <typename T>
 
@@ -536,6 +630,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
             auto digits = cryptoContext->EvalFastRotationPrecompute(ctVector);
 
             std::vector<Ciphertext<DCRTPoly>> fastRotation(babyStep);
+            #pragma omp parallel for
             for (uint32_t j = 0; j < babyStep; j++) {
                 // std::cout << j << std::endl;
                 fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);

@@ -543,8 +543,9 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
 
-    uint32_t multDepth = 23;  // Need more depth for LeNet-5
     ScalingTechnique scTech = FLEXIBLEAUTO;
+    SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
+
     uint32_t scaleModSize = 40;
     uint32_t firstModSize = 50;
     uint32_t ringDim = 32768;
@@ -554,6 +555,13 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t slots = 4096;
     uint32_t batchSize = slots;
 
+    // Bootstrapping parameters
+    std::vector<uint32_t> levelBudget = {4, 4};
+    std::vector<uint32_t> bsgsDim = {0, 0};
+    uint32_t levelsAvailableAfterBootstrap = 12;
+    uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
+    uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
+
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(multDepth);
     parameters.SetScalingModSize(scaleModSize);
@@ -562,7 +570,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     parameters.SetSecurityLevel(sl);
     parameters.SetRingDim(ringDim);
     parameters.SetBatchSize(batchSize);
-    parameters.SetSecretKeyDist(UNIFORM_TERNARY);
+    parameters.SetSecretKeyDist(secretKeyDist);
     parameters.SetKeySwitchTechnique(HYBRID);
     parameters.SetNumLargeDigits(3);
 
@@ -571,6 +579,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
+    cc->Enable(FHE);  // Enable bootstrapping
 
     // Only enable scheme switching if needed
     if (activationType == ActivationType::SCHEME_SWITCH) {
@@ -582,12 +591,17 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
     std::cout << "Activation function: " << activationName << std::endl;
 
+    // ========== Bootstrapping Setup ==========
+    std::cout << "\nSetting up bootstrapping..." << std::endl;
+    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
+
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
     TimeVar t;
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
+    cc->EvalBootstrapKeyGen(keys.secretKey, slots);
 
     // Setup scheme switching only if needed
     double scaleSignFHEW = 4.0;
@@ -710,7 +724,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
 
     // Conv1 Toeplitz
-    auto toeplitzConv1 = ConstructConv2DToeplitz(conv1Kernel, 28, 28, 1, 0, 1, 1, 1, 1);
+    auto toeplitzConv1 = ConstructConv2DToeplitz(conv1Kernel, 28, 28, 1, 0, 1, 1, 1);
     std::vector<std::vector<double>> conv1Diagonals = PackMatDiagWise(toeplitzConv1, batchSize);
     std::size_t conv1Cols = conv1Diagonals.size();
     std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, true);
@@ -718,7 +732,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
               << conv1Rotations.size() << " non-zero diagonals" << std::endl;
 
     // AvgPool1 Toeplitz
-    auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, 24, 24, 2, 0, 1, 1, 1, 1);
+    auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, 24, 24, 2, 0, 1, 1, 1);
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
     std::size_t pool1Cols = pool1Diagonals.size();
     std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, true);
@@ -726,7 +740,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
               << pool1Rotations.size() << " rotation keys needed" << std::endl;
 
     // Conv2 Toeplitz
-    auto toeplitzConv2 = ConstructConv2DToeplitz(conv2Kernel, 12, 12, 1, 0, 1, 1, 1, 1);
+    auto toeplitzConv2 = ConstructConv2DToeplitz(conv2Kernel, 12, 12, 1, 0, 1, 1, 1);
     std::vector<std::vector<double>> conv2Diagonals = PackMatDiagWise(toeplitzConv2, batchSize);
     std::size_t conv2Cols = conv2Diagonals.size();
     std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, true);
@@ -734,7 +748,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
               << conv2Rotations.size() << " rotation keys needed" << std::endl;
 
     // AvgPool2 Toeplitz
-    auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, 8, 8, 2, 0, 1, 1, 1, 1);
+    auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, 8, 8, 2, 0, 1, 1, 1);
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
     std::size_t pool2Cols = pool2Diagonals.size();
     std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, true);
@@ -943,6 +957,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     ptPool1Diags.clear();
     ptPool1Diags.shrink_to_fit();
 
+    // Bootstrap after Pool1 if needed (only when levels are low)
+    double bootstrap1Time = 0.0;
+    uint32_t levelsRemaining1 = multDepth - ctPool1->GetLevel();
+    std::cout << "\n[Bootstrap Check] After AvgPool1: " << levelsRemaining1 << " levels remaining" << std::endl;
+    if (levelsRemaining1 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctPool1 = cc->EvalBootstrap(ctPool1);
+        bootstrap1Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap1Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctPool1->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
+
     auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
     auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2FlatSize, conv2OutputChannels, conv2OutputHeight * conv2OutputWidth);
     auto ptConv2Bias = cc->MakeCKKSPackedPlaintext(conv2BiasVec);
@@ -1018,6 +1047,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     ptPool2Diags.clear();
     ptPool2Diags.shrink_to_fit();
 
+    // Bootstrap after Pool2 if needed (only when levels are low)
+    double bootstrap2Time = 0.0;
+    uint32_t levelsRemaining2 = multDepth - ctPool2->GetLevel();
+    std::cout << "\n[Bootstrap Check] After AvgPool2: " << levelsRemaining2 << " levels remaining" << std::endl;
+    if (levelsRemaining2 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctPool2 = cc->EvalBootstrap(ctPool2);
+        bootstrap2Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap2Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctPool2->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
+
     auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
     auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
     auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
@@ -1070,6 +1114,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     PrintBounds(encReLU3, "Activation3 (encrypted)");
 
     CompareVectors(clearReLU3, encReLU3, "ReLU3", 1e-1);
+
+    // Bootstrap after ReLU3 if needed (only when levels are low)
+    double bootstrap3Time = 0.0;
+    uint32_t levelsRemaining3 = multDepth - ctReLU3->GetLevel();
+    std::cout << "\n[Bootstrap Check] After Activation3: " << levelsRemaining3 << " levels remaining" << std::endl;
+    if (levelsRemaining3 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctReLU3 = cc->EvalBootstrap(ctReLU3);
+        bootstrap3Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap3Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU3->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
 
     auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
     auto dense2BiasVec = PrepareBiasVector(trainedWeights.fc2_bias, dense2Output);
@@ -1136,6 +1195,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     CompareVectors(clearReLU4, encReLU4, "ReLU4", 1e-1);
 
+    // Bootstrap after ReLU4 if needed (only when levels are low)
+    double bootstrap4Time = 0.0;
+    uint32_t levelsRemaining4 = multDepth - ctReLU4->GetLevel();
+    std::cout << "\n[Bootstrap Check] After Activation4: " << levelsRemaining4 << " levels remaining" << std::endl;
+    if (levelsRemaining4 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctReLU4 = cc->EvalBootstrap(ctReLU4);
+        bootstrap4Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap4Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU4->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
+
     auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
     auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
     auto ptDense3Bias = cc->MakeCKKSPackedPlaintext(dense3BiasVec);
@@ -1163,9 +1237,16 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     ptDense3Diags.clear();
     ptDense3Diags.shrink_to_fit();
 
-    double totalInferenceTime = conv1Time + relu1Time + pool1Time + conv2Time + relu2Time +
-                                pool2Time + dense1Time + relu3Time + dense2Time + relu4Time + dense3Time;
+    double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
+                                pool2Time + bootstrap2Time + dense1Time + relu3Time + bootstrap3Time +
+                                dense2Time + relu4Time + bootstrap4Time + dense3Time;
+    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time + bootstrap4Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms" << std::endl;
+    if (totalBootstrapTime > 0) {
+        std::cout << "  (includes " << totalBootstrapTime << " ms for bootstrapping)" << std::endl;
+    } else {
+        std::cout << "  (no bootstrapping needed - sufficient depth available)" << std::endl;
+    }
 
     // ========== Decrypt and Display Results ==========
     std::cout << "\n" << std::string(80, '-') << std::endl;
@@ -1206,17 +1287,32 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << std::string(80, '-') << std::endl;
     std::cout << std::left << std::setw(30) << "Conv1 (28x28x1->24x24x6)" << std::setw(15) << conv1Time << ctConv1->GetLevel() << std::endl;
     std::cout << std::left << std::setw(30) << "ReLU1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "AvgPool1 (24x24x6->12x12x6)" << std::setw(15) << pool1Time << ctPool1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "AvgPool1 (24x24x6->12x12x6)" << std::setw(15) << pool1Time << (bootstrap1Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctPool1->GetLevel())) << std::endl;
+    if (bootstrap1Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 1" << std::setw(15) << bootstrap1Time << ctPool1->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Conv2 (12x12x6->8x8x16)" << std::setw(15) << conv2Time << ctConv2->GetLevel() << std::endl;
     std::cout << std::left << std::setw(30) << "ReLU2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "AvgPool2 (8x8x16->4x4x16)" << std::setw(15) << pool2Time << ctPool2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "AvgPool2 (8x8x16->4x4x16)" << std::setw(15) << pool2Time << (bootstrap2Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctPool2->GetLevel())) << std::endl;
+    if (bootstrap2Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 2" << std::setw(15) << bootstrap2Time << ctPool2->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Dense1 (256->120)" << std::setw(15) << dense1Time << ctDense1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU3" << std::setw(15) << relu3Time << ctReLU3->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "ReLU3" << std::setw(15) << relu3Time << (bootstrap3Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctReLU3->GetLevel())) << std::endl;
+    if (bootstrap3Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 3" << std::setw(15) << bootstrap3Time << ctReLU3->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Dense2 (120->84)" << std::setw(15) << dense2Time << ctDense2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU4" << std::setw(15) << relu4Time << ctReLU4->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "ReLU4" << std::setw(15) << relu4Time << (bootstrap4Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctReLU4->GetLevel())) << std::endl;
+    if (bootstrap4Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 4" << std::setw(15) << bootstrap4Time << ctReLU4->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Dense3 (84->10)" << std::setw(15) << dense3Time << ctOutput->GetLevel() << std::endl;
     std::cout << std::string(80, '-') << std::endl;
     std::cout << std::left << std::setw(30) << "Total Inference" << std::setw(15) << totalInferenceTime << std::endl;
+    if (totalBootstrapTime > 0) {
+        std::cout << std::left << std::setw(30) << "  (Bootstrapping only)" << std::setw(15) << totalBootstrapTime << std::endl;
+    }
     std::cout << std::string(80, '=') << std::endl;
 
     std::cout << "\n✓ MNIST LeNet-5 Inference Complete (Scheme Switching)!" << std::endl;

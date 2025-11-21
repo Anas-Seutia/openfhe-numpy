@@ -541,9 +541,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::cout << "\nSetting up crypto context..." << std::endl;
 
     ScalingTechnique scTech = FLEXIBLEAUTO;
-    uint32_t multDepth = 20;  // Need more depth for full network
-    if (scTech == FLEXIBLEAUTOEXT)
-        multDepth += 1;
+    SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
 
     uint32_t scaleModSize = 50;
     uint32_t firstModSize = 60;
@@ -554,6 +552,16 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t slots = 2048;  // Enough for 720 elements from conv output
     uint32_t batchSize = slots;
 
+    // Bootstrapping parameters
+    std::vector<uint32_t> levelBudget = {4, 4};
+    std::vector<uint32_t> bsgsDim = {0, 0};
+    uint32_t levelsAvailableAfterBootstrap = 10;
+    uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
+    uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
+
+    if (scTech == FLEXIBLEAUTOEXT)
+        multDepth += 1;
+
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(multDepth);
     parameters.SetScalingModSize(scaleModSize);
@@ -562,7 +570,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     parameters.SetSecurityLevel(sl);
     parameters.SetRingDim(ringDim);
     parameters.SetBatchSize(batchSize);
-    parameters.SetSecretKeyDist(UNIFORM_TERNARY);
+    parameters.SetSecretKeyDist(secretKeyDist);
     parameters.SetKeySwitchTechnique(HYBRID);
     parameters.SetNumLargeDigits(3);
 
@@ -571,6 +579,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
+    cc->Enable(FHE);  // Enable bootstrapping
 
     // Only enable scheme switching if needed
     if (activationType == ActivationType::SCHEME_SWITCH) {
@@ -582,12 +591,17 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
     std::cout << "Activation function: " << activationName << std::endl;
 
+    // ========== Bootstrapping Setup ==========
+    std::cout << "\nSetting up bootstrapping..." << std::endl;
+    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
+
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
     TimeVar t;
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
+    cc->EvalBootstrapKeyGen(keys.secretKey, slots);
 
     // Setup scheme switching only if needed
     double scaleSignFHEW = 8.0;
@@ -673,7 +687,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     // Convolution layer
     TIC(t);
-    auto toeplitzConv = ConstructConv2DToeplitz(convKernel, 28, 28, convStride, convPadding, 1, 1, 1, 1);
+    auto toeplitzConv = ConstructConv2DToeplitz(convKernel, 28, 28, convStride, convPadding, 1, 1, 1);
     std::vector<std::vector<double>> convDiagonals = PackMatDiagWise(toeplitzConv, batchSize);
     std::size_t convCols = convDiagonals.size();
     std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, true);
@@ -800,6 +814,21 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<double> encAct1 = ptAct1Result->GetRealPackedValue();
     CompareVectors(clearAct1, encAct1, "Activation1", 1e-1);
 
+    // Bootstrap after first activation if needed (only when levels are low)
+    double bootstrap1Time = 0.0;
+    uint32_t levelsRemaining1 = multDepth - ctAct1->GetLevel();
+    std::cout << "\n[Bootstrap Check] After Activation1: " << levelsRemaining1 << " levels remaining" << std::endl;
+    if (levelsRemaining1 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctAct1 = cc->EvalBootstrap(ctAct1);
+        bootstrap1Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap1Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctAct1->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
+
     // Layer 3: Dense 1 (720 -> 64)
     std::cout << "\n[Layer 3] Dense1 (720 -> 64)..." << std::endl;
     auto dense1BiasVec = PrepareBiasVector(dense1Bias, dense1Output);
@@ -840,6 +869,21 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<double> encAct2 = ptAct2Result->GetRealPackedValue();
     CompareVectors(clearAct2, encAct2, "Activation2", 1e-1);
 
+    // Bootstrap after second activation if needed (only when levels are low)
+    double bootstrap2Time = 0.0;
+    uint32_t levelsRemaining2 = multDepth - ctAct2->GetLevel();
+    std::cout << "\n[Bootstrap Check] After Activation2: " << levelsRemaining2 << " levels remaining" << std::endl;
+    if (levelsRemaining2 < 5) {
+        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        TIC(t);
+        ctAct2 = cc->EvalBootstrap(ctAct2);
+        bootstrap2Time = TOC(t);
+        std::cout << "  Bootstrapping time: " << bootstrap2Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctAct2->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+    }
+
     // Layer 5: Dense 2 (64 -> 10)
     std::cout << "\n[Layer 5] Dense2 (64 -> 10)..." << std::endl;
     auto dense2BiasVec = PrepareBiasVector(dense2Bias, dense2Output);
@@ -864,8 +908,14 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<double> encDense2 = ptDense2Result->GetRealPackedValue();
     CompareVectors(clearDense2, encDense2, "Dense2 (Final)", 1e-1);
 
-    double totalInferenceTime = convTime + act1Time + dense1Time + act2Time + dense2Time;
+    double totalInferenceTime = convTime + act1Time + bootstrap1Time + dense1Time + act2Time + bootstrap2Time + dense2Time;
+    double totalBootstrapTime = bootstrap1Time + bootstrap2Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms" << std::endl;
+    if (totalBootstrapTime > 0) {
+        std::cout << "  (includes " << totalBootstrapTime << " ms for bootstrapping)" << std::endl;
+    } else {
+        std::cout << "  (no bootstrapping needed - sufficient depth available)" << std::endl;
+    }
 
     // ========== Decrypt and Display Results ==========
     std::cout << "\n" << std::string(80, '-') << std::endl;
@@ -914,12 +964,19 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::cout << std::left << std::setw(30) << "Layer" << std::setw(15) << "Time (ms)" << "Level" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
     std::cout << std::left << std::setw(30) << "Convolution (28x28->12x12x5)" << std::setw(15) << convTime << ctConvOut->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "Activation 1" << std::setw(15) << act1Time << ctAct1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "Activation 1" << std::setw(15) << act1Time << (bootstrap1Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctAct1->GetLevel())) << std::endl;
+    if (bootstrap1Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 1" << std::setw(15) << bootstrap1Time << ctAct1->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Dense 1 (720->64)" << std::setw(15) << dense1Time << ctDense1Out->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "Activation 2" << std::setw(15) << act2Time << ctAct2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(30) << "Activation 2" << std::setw(15) << act2Time << (bootstrap2Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctAct2->GetLevel())) << std::endl;
+    if (bootstrap2Time > 0) {
+        std::cout << std::left << std::setw(30) << "  + Bootstrap 2" << std::setw(15) << bootstrap2Time << ctAct2->GetLevel() << std::endl;
+    }
     std::cout << std::left << std::setw(30) << "Dense 2 (64->10)" << std::setw(15) << dense2Time << ctOutput->GetLevel() << std::endl;
     std::cout << std::string(80, '-') << std::endl;
     std::cout << std::left << std::setw(30) << "Total Inference" << std::setw(15) << totalInferenceTime << std::endl;
+    std::cout << std::left << std::setw(30) << "  (Bootstrapping only)" << std::setw(15) << (bootstrap1Time + bootstrap2Time) << std::endl;
     std::cout << std::string(80, '=') << std::endl;
 
     std::cout << "\n✓ MNIST LoLa Inference Complete (" << activationName << ")!" << std::endl;

@@ -203,7 +203,7 @@ void TestTwoLayerConvolution() {
     cc->EvalMultKeyGen(keyPair.secretKey);
 
     // Layer 1: Single channel input
-    auto toeplitz1 = ConstructConv2DToeplitz(kernel1, input_height, input_width, stride, padding, dilation, 1, 1, 1);
+    auto toeplitz1 = ConstructConv2DToeplitz(kernel1, input_height, input_width, stride, padding, dilation, 1, 1);
     std::size_t nRows1 = toeplitz1.size();
 
     std::cout << "Layer 1 Toeplitz matrix: " << toeplitz1.size() << "x" << toeplitz1[0].size() << std::endl;
@@ -235,7 +235,7 @@ void TestTwoLayerConvolution() {
     // Important: The Toeplitz construction expects input_height/width to be per-channel dimensions
     // For multi-channel input, we use the spatial dimensions (not including channel dimension)
     auto toeplitz2 = ConstructConv2DToeplitz(kernel2, layer1_output_height, layer1_output_width,
-                                              stride, padding, dilation, 1, 1, 1);
+                                              stride, padding, dilation, 1, 1);
     std::size_t nRows2 = toeplitz2.size();
 
     std::cout << "Layer 2 Toeplitz matrix: " << toeplitz2.size() << "x" << toeplitz2[0].size() << std::endl;
