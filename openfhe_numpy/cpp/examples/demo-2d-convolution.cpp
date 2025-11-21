@@ -155,7 +155,7 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     std::size_t nCols          = !inputMatrix.empty() ? inputMatrix[0].size() : 0;
     std::size_t batchSize      = cc->GetRingDimension() / 2;
 
-    
+
     // Generate keys
     std::cout << "Generating keys...\n";
     TimeVar t_keygen;
@@ -168,15 +168,15 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     std::vector<std::vector<double>> diagonals = PackMatDiagWise(inputMatrix, batchSize);
     // Encode vector (replicate it to fill the ciphertext)
     std::vector<double> flatVec = PackVecColWise(inputVector, nCols, batchSize);
-    
+
     // Generate rotation keys for all diagonal indices
     std::vector<int32_t> rotationIndices = getOptimalRots(diagonals);
     cc->EvalRotateKeyGen(keyPair.secretKey, rotationIndices);
-    
+
     double time_keygen = TOC(t_keygen);
     std::cout << "Key generation time: " << time_keygen << " ms" << std::endl;
-    
-    
+
+
     std::cout << "Encrypting input vector and diagonals...\n";
     TimeVar t_encrypt;
     TIC(t_encrypt);
@@ -186,7 +186,7 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     auto ctDiags = EncryptVectors(cc, keyPair.publicKey, ptDiags);
     double time_encrypt = TOC(t_encrypt);
     std::cout << "Encryption time: " << time_encrypt << " ms" << std::endl;
-    
+
     std::cout << "\n--- Plaintext Matrix-Vector Product ---\n";
     PrintVector(MulMatVec(inputMatrix, inputVector));
 
@@ -194,7 +194,7 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     std::cout << "\nPerforming homomorphic matrix-vector multiplication (diagonal method)...\n";
     TimeVar t_mult;
     TIC(t_mult);
-    
+
     // Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
     Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
     
