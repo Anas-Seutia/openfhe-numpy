@@ -462,32 +462,24 @@ std::vector<std::vector<T>> MultiplexDenseMatrix(
     const std::vector<std::vector<T>>& matrix,
     const uint32_t input_height,
     const uint32_t input_width,
-    const uint32_t input_gap,
-    const uint32_t output_height,
-    const uint32_t output_width,
-    const uint32_t output_gap) {
+    const uint32_t input_gap) {
 
     uint32_t out_features = matrix.size();
     uint32_t in_features = matrix.empty() ? 0 : matrix[0].size();
 
-    // Derive channel counts from features and spatial dimensions
+    // Derive input channel count from features and spatial dimensions
     uint32_t in_channels = in_features / (input_height * input_width);
-    uint32_t out_channels = out_features / (output_height * output_width);
 
-    // Compute multiplexed dimensions
+    // Compute multiplexed input dimensions
     uint32_t input_gap_squared = input_gap * input_gap;
-    uint32_t output_gap_squared = output_gap * output_gap;
-
     uint32_t super_in_channels = (in_channels + input_gap_squared - 1) / input_gap_squared;
-    uint32_t super_out_channels = (out_channels + output_gap_squared - 1) / output_gap_squared;
-
     uint32_t final_input_height = input_height * input_gap;
     uint32_t final_input_width = input_width * input_gap;
-    uint32_t final_output_height = output_height * output_gap;
-    uint32_t final_output_width = output_width * output_gap;
+    uint32_t multiplexed_in_features = super_in_channels * final_input_height * final_input_width;
 
-    // Create column mapping: logical input index -> multiplexed input index
-    std::vector<uint32_t> col_mapping(in_features);
+    // Create column mapping: multiplexed input index -> logical input index
+    // This unmultiplexes the input by reordering columns
+    std::vector<uint32_t> col_mapping(multiplexed_in_features);
 
     for (uint32_t ci = 0; ci < in_channels; ++ci) {
         for (uint32_t h = 0; h < input_height; ++h) {
@@ -508,66 +500,34 @@ std::vector<std::vector<T>> MultiplexDenseMatrix(
                 uint32_t multiplexed_idx = super_ch * final_input_height * final_input_width +
                                           physical_h * final_input_width + physical_w;
 
-                col_mapping[logical_idx] = multiplexed_idx;
+                // Map: multiplexed column -> logical column
+                col_mapping[multiplexed_idx] = logical_idx;
             }
         }
     }
 
-    // Create row mapping: logical output index -> multiplexed output index
-    std::vector<uint32_t> row_mapping(out_features);
-
-    for (uint32_t co = 0; co < out_channels; ++co) {
-        for (uint32_t h = 0; h < output_height; ++h) {
-            for (uint32_t w = 0; w < output_width; ++w) {
-                // Logical flat index (channel-major order)
-                uint32_t logical_idx = co * output_height * output_width + h * output_width + w;
-
-                // Map to multiplexed position
-                uint32_t super_ch = co / output_gap_squared;
-                uint32_t in_block = co % output_gap_squared;
-                uint32_t block_h = in_block / output_gap;
-                uint32_t block_w = in_block % output_gap;
-
-                uint32_t physical_h = h * output_gap + block_h;
-                uint32_t physical_w = w * output_gap + block_w;
-
-                // Multiplexed flat index (channel-major order)
-                uint32_t multiplexed_idx = super_ch * final_output_height * final_output_width +
-                                          physical_h * final_output_width + physical_w;
-
-                row_mapping[logical_idx] = multiplexed_idx;
-            }
-        }
-    }
-
-    // Create multiplexed matrix with reordered rows and columns
-    uint32_t multiplexed_out_features = super_out_channels * final_output_height * final_output_width;
-    uint32_t multiplexed_in_features = super_in_channels * final_input_height * final_input_width;
-
-    std::vector<std::vector<T>> multiplexed_matrix(
-        multiplexed_out_features,
+    // Create new matrix with reordered columns (unmultiplexing input)
+    // Output features remain unchanged
+    std::vector<std::vector<T>> reordered_matrix(
+        out_features,
         std::vector<T>(multiplexed_in_features, 0.0)
     );
 
-    // Reorder the matrix
+    // Reorder columns: for each multiplexed input column, get the corresponding logical column
     for (uint32_t row = 0; row < out_features; ++row) {
-        for (uint32_t col = 0; col < in_features; ++col) {
-            uint32_t new_row = row_mapping[row];
-            uint32_t new_col = col_mapping[col];
-            multiplexed_matrix[new_row][new_col] = matrix[row][col];
+        for (uint32_t multiplexed_col = 0; multiplexed_col < multiplexed_in_features; ++multiplexed_col) {
+            uint32_t logical_col = col_mapping[multiplexed_col];
+            reordered_matrix[row][multiplexed_col] = matrix[row][logical_col];
         }
     }
 
-    return multiplexed_matrix;
+    return reordered_matrix;
 }
 template std::vector<std::vector<double>> MultiplexDenseMatrix(
     const std::vector<std::vector<double>>& matrix,
     const uint32_t input_height,
     const uint32_t input_width,
-    const uint32_t input_gap,
-    const uint32_t output_height,
-    const uint32_t output_width,
-    const uint32_t output_gap);
+    const uint32_t input_gap);
 
 template <typename T>
 

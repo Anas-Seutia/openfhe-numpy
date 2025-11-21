@@ -85,26 +85,24 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
 );
 
 /**
- * @brief Multiplex a dense layer weight matrix for channel-to-spatial packing
+ * @brief Reorder dense layer weight matrix columns to unmultiplex input
+ *
+ * This function reorders the columns of a weight matrix to work with multiplexed inputs.
+ * It transforms from multiplexed input layout to standard layout, effectively unmultiplexing
+ * the input before the dense layer operation.
  *
  * @param matrix Input weight matrix (out_features x in_features)
  * @param input_height Logical input height (Hi)
  * @param input_width Logical input width (Wi)
  * @param input_gap Multiplexing gap for input (iG)
- * @param output_height Logical output height (Ho)
- * @param output_width Logical output width (Wo)
- * @param output_gap Multiplexing gap for output (oG)
- * @return Multiplexed weight matrix with reordered rows and columns
+ * @return Weight matrix with reordered columns for unmultiplexing
  */
 template <typename T>
 std::vector<std::vector<T>> MultiplexDenseMatrix(
     const std::vector<std::vector<T>>& matrix,
     const uint32_t input_height,
     const uint32_t input_width,
-    const uint32_t input_gap,
-    const uint32_t output_height,
-    const uint32_t output_width,
-    const uint32_t output_gap
+    const uint32_t input_gap
 );
 
 /**

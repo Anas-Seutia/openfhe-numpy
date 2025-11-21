@@ -20,18 +20,6 @@ using namespace lbcrypto;
  * @return CryptoContext<DCRTPoly> Configured crypto context
  */
 CryptoContext<DCRTPoly> GenerateCryptoContext(uint32_t multDepth, uint32_t batchSize = 0) {
-    // Step 1: Setup CryptoContext
-
-    // A. Specify main parameters
-
-    /* A2) Bit-length of scaling factor.
-    * CKKS works for real numbers, but these numbers are encoded as integers.
-    * For instance, real number m=0.01 is encoded as m'=round(m*D), where D is
-    * a scheme parameter called scaling factor. Suppose D=1000, then m' is 10 (an
-    * integer). Say the result of a computation based on m' is 130, then at
-    * decryption, the scaling factor is removed so the user is presented with
-    * the real number result of 0.13.
-    */
     uint32_t scaleModSize = 59;
 
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -41,7 +29,6 @@ CryptoContext<DCRTPoly> GenerateCryptoContext(uint32_t multDepth, uint32_t batch
 
     CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
 
-    // Enable the features that you wish to use
     cc->Enable(PKE);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
@@ -111,51 +98,47 @@ std::vector<std::vector<double>> NaiveConv2D(
     return output;
 }
 
-std::vector<std::vector<double>> DiagonalConv_Packing(
-    const std::vector<std::vector<double>> matrix,
-    const std::size_t &num_slots
+/**
+ * @brief Construct a dense (non-multiplexed) convolution matrix
+ *
+ * @param kernel 4D kernel (out_channels, in_channels, kernel_height, kernel_width)
+ * @param input_height Input height
+ * @param input_width Input width
+ * @param stride Stride
+ * @param padding Padding
+ * @param dilation Dilation
+ * @return Dense convolution matrix
+ */
+std::vector<std::vector<double>> ConstructDenseConvMatrix(
+    const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel,
+    const uint32_t &input_height,
+    const uint32_t &input_width,
+    const uint32_t &stride,
+    const uint32_t &padding,
+    const uint32_t &dilation
 ) {
-    std::vector<std::vector<double>> diagonalized = PackMatDiagWise(matrix, num_slots);
-    std::vector<int32_t> nonZeroDiagonals = getOptimalRots(diagonalized);
-
-    int count = 0;
-    for (const int32_t diag_idx : nonZeroDiagonals) {
-        if (diag_idx < 0) continue;
-        std::cout << "  Diagonal " << count << " (first 10 values): [";
-        for (size_t i = 0; i < std::min(size_t(10), diagonalized[diag_idx].size()); ++i) {
-            std::cout << std::fixed << std::setprecision(1) << diagonalized[diag_idx][i];
-            if (i < std::min(size_t(10), diagonalized[diag_idx].size()) - 1) std::cout << ", ";
-        }
-        std::cout << "]" << std::endl;
-        count++;
-    }
-    return diagonalized;
+    // Use ConstructConv2DToeplitz with gap=1 (no multiplexing) to get base dense matrix
+    return ConstructConv2DToeplitz(kernel, input_height, input_width, stride, padding, dilation, 1, 1);
 }
 
 void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std::vector<double> inputVector) {
-    std::cout << "=== DEMO: Conv. (Matrix-Vector Product) with Diagonal Encoding ===" << std::endl;
+    std::cout << "=== DEMO: Conv. (Matrix-Vector Product) with Diagonal Encoding ===\n" << std::endl;
 
     uint multDepth = 10;
 
-    printf("\nMatrix: \n");
-    PrintMatrix(inputMatrix);
-
-    printf("\nVector: \n");
-    PrintVector(inputVector);
+    printf("Matrix dimensions: %zu x %zu\n", inputMatrix.size(), inputMatrix[0].size());
+    printf("Vector size: %zu\n\n", inputVector.size());
 
     std::cout << "Initializing CryptoContext...\n";
     TimeVar t_setup;
     TIC(t_setup);
     CryptoContext<DCRTPoly> cc = GenerateCryptoContext(multDepth);
-    double time_setup          = TOC(t_setup);
+    double time_setup = TOC(t_setup);
     std::cout << "Setup time: " << time_setup << " ms" << std::endl;
 
-    // Encode and encrypt mat and vector
-
-    std::size_t nRows          = inputMatrix.size();
-    std::size_t nCols          = !inputMatrix.empty() ? inputMatrix[0].size() : 0;
-    std::size_t batchSize      = cc->GetRingDimension() / 2;
-
+    std::size_t nRows = inputMatrix.size();
+    std::size_t nCols = !inputMatrix.empty() ? inputMatrix[0].size() : 0;
+    std::size_t batchSize = cc->GetRingDimension() / 2;
 
     // Generate keys
     std::cout << "Generating keys...\n";
@@ -167,16 +150,14 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     // Pack matrix into diagonals
     std::cout << "Packing matrix into diagonals...\n";
     std::vector<std::vector<double>> diagonals = PackMatDiagWise(inputMatrix, batchSize);
-    // Encode vector (replicate it to fill the ciphertext)
     std::vector<double> flatVec = PackVecColWise(inputVector, nCols, batchSize);
 
-    // Generate rotation keys for all diagonal indices
+    // Generate rotation keys
     std::vector<int32_t> rotationIndices = getOptimalRots(diagonals);
     cc->EvalRotateKeyGen(keyPair.secretKey, rotationIndices);
 
     double time_keygen = TOC(t_keygen);
     std::cout << "Key generation time: " << time_keygen << " ms" << std::endl;
-
 
     std::cout << "Encrypting input vector and diagonals...\n";
     TimeVar t_encrypt;
@@ -191,14 +172,11 @@ void MatrixVectorProduct_Diag(std::vector<std::vector<double>> inputMatrix, std:
     std::cout << "\n--- Plaintext Matrix-Vector Product ---\n";
     PrintVector(MulMatVec(inputMatrix, inputVector));
 
-    // Perform encrypted mat-vector multiplication using diagonals
-    std::cout << "\nPerforming homomorphic matrix-vector multiplication (diagonal method)...\n";
+    // Perform encrypted mat-vector multiplication
+    std::cout << "\nPerforming homomorphic matrix-vector multiplication...\n";
     TimeVar t_mult;
     TIC(t_mult);
-
-    // Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ptDiags, rotationIndices);
     Ciphertext<DCRTPoly> ctResult = EvalMultMatVecDiag(ctVec, ctDiags, 1, rotationIndices);
-    
     double time_mult = TOC(t_mult);
     std::cout << "Homomorphic multiplication time: " << time_mult << " ms" << std::endl;
 
@@ -261,12 +239,13 @@ int main(int argc, char* argv[]) {
     };
 
     // Convolution parameters
-    uint32_t input_height = 28;   // Expected input height for Toeplitz construction
-    uint32_t input_width = 28;    // Expected input width for Toeplitz construction
+    uint32_t input_height = 28;   // Expected input height
+    uint32_t input_width = 28;    // Expected input width
     uint32_t stride = 2;
     uint32_t padding = 0;
     uint32_t dilation = 1;
-    uint32_t input_gap = 1;
+
+    // Multiplexing parameters (used in case 1 and elsewhere)
     uint32_t output_gap = 1;
 
     // ========================================================================
@@ -278,26 +257,109 @@ int main(int argc, char* argv[]) {
         choice = atoi(argv[1]);
     }
     else {
-        std::cout << "OpenFHE Matrix Operations Demo\n"
-                  << "-------------------------------\n"
-                  << "1. Toeplitz Packing Only\n"
-                  << "2. Toeplitz + Diagonalize Packing\n"
-                  << "3. Full Convolution\n"
+        std::cout << "\nDense Convolution Matrix Demo\n"
+                  << "-----------------------------\n"
+                  << "1. Multiplexed Matrix → Unmultiplex (MultiplexDenseMatrix)\n"
+                  << "2. Dense Matrix → Diagonalize\n"
+                  << "3. Full Convolution Test\n"
                   << "Enter choice (default=1): ";
         std::cin >> choice;
     }
 
     switch (choice) {
-        case 1:
-            PrintMatrix(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap));
+        case 1: {
+            std::cout << "\n=== Case 1: Multiplexed Matrix + Unmultiplex (MultiplexDenseMatrix) ===\n" << std::endl;
+
+            // Build multiplexed convolution matrix with input_gap > 1
+            uint32_t test_input_gap = 2;  // Use gap=2 for multiplexing
+            std::cout << "Building multiplexed convolution matrix with input_gap=" << test_input_gap << "...\n";
+            auto multiplexedMatrix = ConstructConv2DToeplitz(inputKernel, input_height, input_width,
+                                                            stride, padding, dilation,
+                                                            test_input_gap, output_gap);
+            std::cout << "Multiplexed matrix dimensions: " << multiplexedMatrix.size() << " x "
+                      << multiplexedMatrix[0].size() << "\n" << std::endl;
+
+            std::cout << "Multiplexed Matrix (first 10x10):\n";
+            for (size_t i = 0; i < std::min(size_t(10), multiplexedMatrix.size()); ++i) {
+                for (size_t j = 0; j < std::min(size_t(10), multiplexedMatrix[i].size()); ++j) {
+                    std::cout << std::fixed << std::setprecision(1) << multiplexedMatrix[i][j] << " ";
+                }
+                std::cout << std::endl;
+            }
+
+            // Apply MultiplexDenseMatrix to unmultiplex (reorder columns)
+            std::cout << "\nApplying MultiplexDenseMatrix to unmultiplex input (input_gap="
+                      << test_input_gap << ")...\n";
+            std::cout << "This reorders columns from multiplexed to standard layout.\n";
+            auto unmultiplexedMatrix = MultiplexDenseMatrix(multiplexedMatrix,
+                                                           input_height, input_width, test_input_gap);
+            std::cout << "Unmultiplexed matrix dimensions: " << unmultiplexedMatrix.size() << " x "
+                      << unmultiplexedMatrix[0].size() << "\n" << std::endl;
+
+            std::cout << "Unmultiplexed Matrix (first 10x10):\n";
+            for (size_t i = 0; i < std::min(size_t(10), unmultiplexedMatrix.size()); ++i) {
+                for (size_t j = 0; j < std::min(size_t(10), unmultiplexedMatrix[i].size()); ++j) {
+                    std::cout << std::fixed << std::setprecision(1) << unmultiplexedMatrix[i][j] << " ";
+                }
+                std::cout << std::endl;
+            }
+
+            // Compare with non-multiplexed matrix
+            std::cout << "\nFor comparison, non-multiplexed matrix (gap=1):\n";
+            auto standardMatrix = ConstructDenseConvMatrix(inputKernel, input_height, input_width,
+                                                          stride, padding, dilation);
+            std::cout << "Standard matrix dimensions: " << standardMatrix.size() << " x "
+                      << standardMatrix[0].size() << "\n" << std::endl;
             break;
-        case 2:
-            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), 64*2*2*2*2*2*2);
+        }
+        case 2: {
+            std::cout << "\n=== Case 2: Dense Matrix + Diagonalize ===\n" << std::endl;
+
+            // Build dense matrix
+            auto denseMatrix = ConstructDenseConvMatrix(inputKernel, input_height, input_width, stride, padding, dilation);
+            std::cout << "Dense matrix dimensions: " << denseMatrix.size() << " x " << denseMatrix[0].size() << "\n" << std::endl;
+
+            // Diagonalize
+            std::size_t num_slots = 64 * 64;
+            std::cout << "Diagonalizing with " << num_slots << " slots...\n";
+            auto diagonals = PackMatDiagWise(denseMatrix, num_slots);
+            auto rotations = getOptimalRots(diagonals);
+
+            std::cout << "Number of diagonals: " << diagonals.size() << std::endl;
+            std::cout << "Number of non-zero diagonals: " << rotations.size() - 1 << "\n" << std::endl;
+
+            int count = 0;
+            for (const int32_t diag_idx : rotations) {
+                if (diag_idx < 0) continue;
+                std::cout << "  Diagonal " << count << " (rotation " << diag_idx << ", first 10 values): [";
+                for (size_t i = 0; i < std::min(size_t(10), diagonals[diag_idx].size()); ++i) {
+                    std::cout << std::fixed << std::setprecision(1) << diagonals[diag_idx][i];
+                    if (i < std::min(size_t(10), diagonals[diag_idx].size()) - 1) std::cout << ", ";
+                }
+                std::cout << "]" << std::endl;
+                count++;
+            }
             break;
-        case 3:
-            MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));
-            std::cout << std::endl << "--- Cleartext Computation Result ---" << std::endl;
+        }
+        case 3: {
+            std::cout << "\n=== Case 3: Full Convolution Test ===\n" << std::endl;
+
+            // Build dense matrix
+            auto denseMatrix = ConstructDenseConvMatrix(inputKernel, input_height, input_width, stride, padding, dilation);
+
+            // Encode input matrix as vector
+            auto inputVector = EncodeMatrix(input2DMatrix, 64);
+
+            // Run homomorphic computation
+            MatrixVectorProduct_Diag(denseMatrix, inputVector);
+
+            // Show cleartext result
+            std::cout << std::endl << "--- Cleartext Convolution Result ---" << std::endl;
             PrintMatrix(NaiveConv2D(input2DMatrix, inputKernel, stride, padding, dilation));
+            break;
+        }
+        default:
+            std::cout << "Invalid choice. Please select 1, 2, or 3." << std::endl;
             break;
     }
 
