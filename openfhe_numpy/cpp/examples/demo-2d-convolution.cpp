@@ -115,8 +115,10 @@ std::vector<std::vector<double>> DiagonalConv_Packing(
     const std::vector<std::vector<double>> matrix,
     const std::size_t &num_slots
 ) {
+    std::cout << "enay" << std::endl;
     std::vector<std::vector<double>> diagonalized = PackMatDiagWise(matrix, num_slots);
     std::vector<int32_t> nonZeroDiagonals = getOptimalRots(diagonalized);
+
 
     for (const int32_t diag_idx : nonZeroDiagonals) {
         std::cout << "  Diagonal " << diag_idx << " (first 10 values): [";
@@ -225,9 +227,47 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<std::vector<std::vector<double>>>> inputKernel = {
         {  // Output channel 0
             {  // Input channel 0
-                {7, 0, 1},
-                {3, 5, 0},
-                {1, 8, 0}
+                {7, 0, 1, 3, 3},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+            }
+        },
+                {  // Output channel 0
+            {  // Input channel 0
+                {7, 0, 1, 3, 3},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+            }
+        },
+                {  // Output channel 0
+            {  // Input channel 0
+                {7, 0, 1, 3, 3},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+            }
+        },
+                {  // Output channel 0
+            {  // Input channel 0
+                {7, 0, 1, 3, 3},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+            }
+        },
+                {  // Output channel 0
+            {  // Input channel 0
+                {7, 0, 1, 3, 3},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
+                {3, 5, 6, 2, 7},
             }
         }
     };
@@ -241,9 +281,9 @@ int main(int argc, char* argv[]) {
                                                         {2,  5,  0,  2,  8,  8,  5,  9},
                                                         {5,  1,  10, 6,  2,  8,  6,  3}};
 
-    uint32_t input_height = 8;
-    uint32_t input_width = 8;
-    uint32_t stride = 1;
+    uint32_t input_height = 28;
+    uint32_t input_width = 28;
+    uint32_t stride = 2;
     uint32_t padding = 0;
     uint32_t dilation = 1;
     uint32_t batch_size = 1;
@@ -276,7 +316,7 @@ int main(int argc, char* argv[]) {
             PrintMatrix(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap));
             break;
         case 2:
-            PrintMatrix(DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), 64));
+            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), 64*2*2*2*2*2);
             break;
         case 3:
             MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, batch_size, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));

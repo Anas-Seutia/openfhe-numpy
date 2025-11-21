@@ -92,3 +92,11 @@ CTestTestfile.cmake
 Makefile
 Testing/
 install_manifest.txt
+
+# Datasets
+openfhe_numpy/cpp/data/*
+data/MNIST/*
+
+# Models
+export*.py
+openfhe_numpy/cpp/models/*

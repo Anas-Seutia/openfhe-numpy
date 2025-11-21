@@ -10,11 +10,13 @@
 #include "numpy_helper_functions.h"
 #include "conv_helper_function.h"
 #include "relu_helper_function.h"
+#include "weight_loader.h"
 
 #include <iostream>
 #include <iomanip>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <cmath>
 #include <algorithm>
 
@@ -24,6 +26,13 @@ using namespace lbcrypto;
 // ========== DEBUG MODE ==========
 // Set to true to decrypt and print intermediate values after each layer
 constexpr bool DEBUG_MODE = true;
+
+// ========== ACTIVATION FUNCTION TYPE ==========
+enum class ActivationType {
+    SCHEME_SWITCH,  // CKKS-FHEW-CKKS scheme switching
+    CHEBYSHEV,      // Chebyshev polynomial approximation
+    SQUARE          // Square approximation (x^2 based)
+};
 
 /**
  * @brief MNIST LeNet-5 Network Architecture (Scheme Switching for ReLU)
@@ -123,6 +132,71 @@ void PrintWeightsDebug(const std::vector<std::vector<double>>& weights, const st
 }
 
 /**
+ * @brief Helper function to prepare bias vector for addition to ciphertext
+ * @param bias Bias vector (one value per output channel/neuron)
+ * @param outputSize Total size of output (channels * height * width for conv, or neurons for dense)
+ * @param channels Number of channels (for conv layers)
+ * @param spatialSize Height * width (for conv layers, set to 1 for dense)
+ */
+std::vector<double> PrepareBiasVector(
+    const std::vector<double>& bias,
+    uint32_t outputSize,
+    uint32_t channels = 1,
+    uint32_t spatialSize = 1
+) {
+    std::vector<double> biasVec(outputSize, 0.0);
+
+    if (spatialSize == 1) {
+        // Dense layer: bias[i] goes to position i
+        for (size_t i = 0; i < bias.size() && i < outputSize; i++) {
+            biasVec[i] = bias[i];
+        }
+    } else {
+        // Conv layer: bias[c] is replicated across all spatial positions of channel c
+        for (uint32_t c = 0; c < channels; c++) {
+            for (uint32_t s = 0; s < spatialSize; s++) {
+                biasVec[c * spatialSize + s] = bias[c];
+            }
+        }
+    }
+
+    return biasVec;
+}
+
+/**
+ * @brief Helper function to perform ReLU using Chebyshev approximation
+ */
+Ciphertext<DCRTPoly> EvalReLUChebyshev(
+    CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct,
+    uint32_t polyDegree = 63,
+    double lowerBound = -10.0,
+    double upperBound = 10.0
+) {
+    // Use Chebyshev approximation for ReLU function
+    auto reluResult = cc->EvalChebyshevFunction(
+        [](double x) -> double { return std::max(0.0, x); },
+        ct,
+        lowerBound,
+        upperBound,
+        polyDegree
+    );
+    return reluResult;
+}
+
+/**
+ * @brief Helper function to perform Square activation: f(x) = x^2
+ */
+Ciphertext<DCRTPoly> EvalSquareActivation(
+    CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct
+) {
+    // Simply square the input
+    auto squareResult = cc->EvalMult(ct, ct);
+    return squareResult;
+}
+
+/**
  * @brief Helper function to perform ReLU using scheme switching
  */
 Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
@@ -150,6 +224,43 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     return ctReLU;
 }
 
+/**
+ * @brief Unified activation function that dispatches to the appropriate method
+ */
+Ciphertext<DCRTPoly> EvalActivation(
+    CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct,
+    ActivationType activationType,
+    const PublicKey<DCRTPoly>& publicKey = nullptr,
+    uint32_t numSlots = 0,
+    uint32_t totalSlots = 0,
+    double scaleSign = 8.0,
+    uint32_t chebyDegree = 63,
+    double chebyLower = -10.0,
+    double chebyUpper = 10.0,
+    double scaleFactor = 1.0
+) {
+    switch (activationType) {
+        case ActivationType::SCHEME_SWITCH:
+            return EvalReLUSchemeSwitching(cc, ct, publicKey, numSlots, totalSlots, scaleSign);
+
+        case ActivationType::CHEBYSHEV:
+            return EvalReLUChebyshev(cc, ct, chebyDegree, chebyLower, chebyUpper);
+
+        case ActivationType::SQUARE: {
+            auto result = EvalSquareActivation(cc, ct);
+            // Apply scale factor if not 1.0
+            if (std::abs(scaleFactor - 1.0) > 1e-9) {
+                result = cc->EvalMult(result, scaleFactor);
+            }
+            return result;
+        }
+
+        default:
+            throw std::runtime_error("Unknown activation type");
+    }
+}
+
 // ========== CLEARTEXT VALIDATION FUNCTIONS (REMOVE LATER) ==========
 
 /**
@@ -159,7 +270,8 @@ std::vector<std::vector<std::vector<double>>> CleartextConv2D(
     const std::vector<std::vector<std::vector<double>>>& input,
     const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel,
     uint32_t stride = 1,
-    uint32_t padding = 0
+    uint32_t padding = 0,
+    const std::vector<double>* bias = nullptr
 ) {
     uint32_t in_channels = input.size();
     uint32_t input_height = input[0].size();
@@ -193,6 +305,9 @@ std::vector<std::vector<std::vector<double>>> CleartextConv2D(
                     }
                 }
                 output[oc][oh][ow] = sum;
+                if (bias) {
+                    output[oc][oh][ow] += (*bias)[oc];
+                }
             }
         }
     }
@@ -255,12 +370,16 @@ std::vector<double> CleartextFlatten(const std::vector<std::vector<std::vector<d
  */
 std::vector<double> CleartextDense(
     const std::vector<double>& input,
-    const std::vector<std::vector<double>>& weights
+    const std::vector<std::vector<double>>& weights,
+    const std::vector<double>* bias = nullptr
 ) {
     std::vector<double> output(weights.size(), 0.0);
     for (size_t i = 0; i < weights.size(); i++) {
         for (size_t j = 0; j < input.size(); j++) {
             output[i] += weights[i][j] * input[j];
+        }
+        if (bias) {
+            output[i] += (*bias)[i];
         }
     }
     return output;
@@ -275,6 +394,32 @@ std::vector<double> CleartextReLU(const std::vector<double>& input) {
         output[i] = std::max(0.0, input[i]);
     }
     return output;
+}
+
+/**
+ * @brief Cleartext Square activation for validation
+ */
+std::vector<double> CleartextSquare(const std::vector<double>& input, double scaleFactor = 1.0) {
+    std::vector<double> output(input.size());
+    for (size_t i = 0; i < input.size(); i++) {
+        output[i] = input[i] * input[i] * scaleFactor;
+    }
+    return output;
+}
+
+/**
+ * @brief Cleartext activation function dispatcher
+ */
+std::vector<double> CleartextActivation(const std::vector<double>& input, ActivationType activationType, double scaleFactor = 1.0) {
+    switch (activationType) {
+        case ActivationType::SCHEME_SWITCH:
+        case ActivationType::CHEBYSHEV:
+            return CleartextReLU(input);  // Both use ReLU
+        case ActivationType::SQUARE:
+            return CleartextSquare(input, scaleFactor);
+        default:
+            throw std::runtime_error("Unknown activation type");
+    }
 }
 
 /**
@@ -320,15 +465,28 @@ void CompareVectors(const std::vector<double>& cleartext, const std::vector<doub
 
 // ========== END CLEARTEXT VALIDATION FUNCTIONS ==========
 
-void MNISTLeNet5Inference() {
+void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
-    std::cout << "  MNIST LeNet-5 Network Inference (Scheme Switching)" << std::endl;
-    std::cout << "  Architecture: Conv1->ReLU->Pool1->Conv2->ReLU->Pool2->FC1->ReLU->FC2->ReLU->FC3" << std::endl;
+
+    // Print activation type
+    std::string activationName;
+    switch (activationType) {
+        case ActivationType::SCHEME_SWITCH:
+            activationName = "Scheme Switching";
+            break;
+        case ActivationType::CHEBYSHEV:
+            activationName = "Chebyshev Approximation";
+            break;
+        case ActivationType::SQUARE:
+            activationName = "Square Activation (x²)";
+            break;
+    }
+
+    std::cout << "  MNIST LeNet-5 Network Inference (" << activationName << ")" << std::endl;
+    std::cout << "  Architecture: Conv1->Act->Pool1->Conv2->Act->Pool2->FC1->Act->FC2->Act->FC3" << std::endl;
     std::cout << std::string(80, '=') << "\n" << std::endl;
 
-    // ========== Set Fixed Random Seed for Reproducibility ==========
-    srand(42);  // Fixed seed ensures same weights across all implementations
-    std::cout << "Random seed: 42 (for reproducible weights)" << std::endl << std::endl;
+    // Note: Using trained weights from PyTorch model (no random seed needed)
 
     // ========== Network Parameters ==========
     std::cout << "LeNet-5 Architecture:" << std::endl;
@@ -345,51 +503,51 @@ void MNISTLeNet5Inference() {
     std::cout << "  ReLU: Scheme switching" << std::endl;
     std::cout << "  Dense3: 84 -> 10 neurons (output)" << std::endl << std::endl;
 
-    // ========== Sample MNIST Input ==========
-    std::cout << "Creating sample MNIST input..." << std::endl;
-    std::vector<std::vector<double>> mnistInput = {
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 18, 18, 18, 126, 136, 175, 26, 166, 255, 247, 127, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 30, 36, 94, 154, 170, 253, 253, 253, 253, 253, 225, 172, 253, 242, 195, 64, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 49, 238, 253, 253, 253, 253, 253, 253, 253, 253, 251, 93, 82, 82, 56, 39, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 18, 219, 253, 253, 253, 253, 253, 198, 182, 247, 241, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 80, 156, 107, 253, 253, 205, 11, 0, 43, 154, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 1, 154, 253, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 139, 253, 190, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 190, 253, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 241, 225, 160, 108, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 81, 240, 253, 253, 119, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 186, 253, 253, 150, 27, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 93, 252, 253, 187, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 249, 253, 249, 64, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 46, 130, 183, 253, 253, 207, 2, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 148, 229, 253, 253, 253, 250, 182, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 114, 221, 253, 253, 253, 253, 201, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 23, 66, 213, 253, 253, 253, 253, 198, 81, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 18, 171, 219, 253, 253, 253, 253, 195, 80, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 55, 172, 226, 253, 253, 253, 253, 244, 133, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 136, 253, 253, 253, 212, 135, 132, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-    };
-    std::cout << "Sample input created (28x28)" << std::endl;
+    // ========== Load MNIST Input ==========
+    std::cout << "Loading MNIST test sample #" << sampleIndex << "..." << std::endl;
 
-    // ========== Setup Crypto Context for Scheme Switching ==========
+    // Construct path to MNIST sample
+    std::string mnistDataDir = "../openfhe_numpy/cpp/data/mnist";
+
+    // Find the file for this sample index
+    std::stringstream samplePath;
+    samplePath << mnistDataDir << "/mnist_" << sampleIndex << "_label_";
+
+    // We need to find the actual file (since we don't know the label yet)
+    // Try to find files matching the pattern
+    std::string basePattern = samplePath.str();
+    std::string actualFile = "";
+    int trueLabel = -1;
+
+    // Try labels 0-9
+    for (int label = 0; label < 10; label++) {
+        std::stringstream testPath;
+        testPath << mnistDataDir << "/mnist_" << sampleIndex << "_label_" << label << ".bin";
+        std::ifstream testFile(testPath.str());
+        if (testFile.good()) {
+            actualFile = testPath.str();
+            trueLabel = label;
+            break;
+        }
+    }
+
+    if (actualFile.empty()) {
+        throw std::runtime_error("Could not find MNIST sample #" + std::to_string(sampleIndex) +
+                                 " in " + mnistDataDir + "\nRun export_mnist_sample.py first!");
+    }
+
+    // Load the MNIST image
+    auto mnistInput = LoadMNISTImage(actualFile);
+    std::cout << "True label: " << trueLabel << std::endl;
+
+    // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
 
+    uint32_t multDepth = 23;  // Need more depth for LeNet-5
     ScalingTechnique scTech = FLEXIBLEAUTO;
-    uint32_t multDepth = 25;  // Need more depth for LeNet-5
-    if (scTech == FLEXIBLEAUTOEXT)
-        multDepth += 1;
-
-    uint32_t scaleModSize = 50;
-    uint32_t firstModSize = 60;
-    uint32_t ringDim = 8192;
+    uint32_t scaleModSize = 40;
+    uint32_t firstModSize = 50;
+    uint32_t ringDim = 32768;
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = TOY;
     uint32_t logQ_ccLWE = 25;
@@ -413,11 +571,16 @@ void MNISTLeNet5Inference() {
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
-    cc->Enable(SCHEMESWITCH);
+
+    // Only enable scheme switching if needed
+    if (activationType == ActivationType::SCHEME_SWITCH) {
+        cc->Enable(SCHEMESWITCH);
+    }
 
     std::cout << "CKKS scheme using ring dimension " << cc->GetRingDimension() << std::endl;
     std::cout << "Number of slots: " << slots << std::endl;
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
+    std::cout << "Activation function: " << activationName << std::endl;
 
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
@@ -426,41 +589,50 @@ void MNISTLeNet5Inference() {
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
 
-    // Setup scheme switching
-    SchSwchParams params;
-    params.SetSecurityLevelCKKS(sl);
-    params.SetSecurityLevelFHEW(slBin);
-    params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
-    params.SetNumSlotsCKKS(slots);
-    params.SetNumValues(3456);  // Max(24*24*6=3456, 12*12*6=864, 8*8*16=1024, 256, 120, 84)
-
-    auto privateKeyFHEW = cc->EvalSchemeSwitchingSetup(params);
-    auto ccLWE = cc->GetBinCCForSchemeSwitch();
-    ccLWE->BTKeyGen(privateKeyFHEW);
-    cc->EvalSchemeSwitchingKeyGen(keys, privateKeyFHEW);
-
-    auto modulus_LWE = 1 << logQ_ccLWE;
-    auto beta = ccLWE->GetBeta().ConvertToInt();
-    auto pLWE = modulus_LWE / (2 * beta);
+    // Setup scheme switching only if needed
     double scaleSignFHEW = 4.0;
-    cc->EvalCompareSwitchPrecompute(pLWE, scaleSignFHEW);
+    if (activationType == ActivationType::SCHEME_SWITCH) {
+        SchSwchParams params;
+        params.SetSecurityLevelCKKS(sl);
+        params.SetSecurityLevelFHEW(slBin);
+        params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
+        params.SetNumSlotsCKKS(slots);
+        params.SetNumValues(3456);  // Max(24*24*6=3456, 12*12*6=864, 8*8*16=1024, 256, 120, 84)
+
+        auto privateKeyFHEW = cc->EvalSchemeSwitchingSetup(params);
+        auto ccLWE = cc->GetBinCCForSchemeSwitch();
+        ccLWE->BTKeyGen(privateKeyFHEW);
+        cc->EvalSchemeSwitchingKeyGen(keys, privateKeyFHEW);
+
+        auto modulus_LWE = 1 << logQ_ccLWE;
+        auto beta = ccLWE->GetBeta().ConvertToInt();
+        auto pLWE = modulus_LWE / (2 * beta);
+        cc->EvalCompareSwitchPrecompute(pLWE, scaleSignFHEW);
+    }
 
     std::cout << "Key generation time: " << TOC(t) << " ms" << std::endl;
 
-    // ========== Define Network Weights ==========
-    std::cout << "\nInitializing network weights..." << std::endl;
+    // ========== Load Network Weights ==========
+    std::cout << "\nLoading network weights from trained model..." << std::endl;
 
-    // Conv1: 1 -> 6 channels, 5x5 kernel, stride=1
-    std::vector<std::vector<std::vector<std::vector<double>>>> conv1Kernel(6);
-    for (int oc = 0; oc < 6; oc++) {
-        conv1Kernel[oc].resize(1);
-        conv1Kernel[oc][0].resize(5, std::vector<double>(5, 0.0));
-        for (int i = 0; i < 5; i++) {
-            for (int j = 0; j < 5; j++) {
-                conv1Kernel[oc][0][i][j] = (rand() % 200 - 100) / 100.0;
-            }
-        }
+    // Select model based on activation type
+    std::string weightsDir;
+    if (activationType == ActivationType::SQUARE) {
+        weightsDir = "../openfhe_numpy/cpp/models/lenet5_weight_square";
+        std::cout << "Using square activation model (lenet5square.pt)" << std::endl;
+    } else {
+        weightsDir = "../openfhe_numpy/cpp/models/lenet5_weight_relu";
+        std::cout << "Using ReLU model (lenet5relu.pt)" << std::endl;
     }
+
+    LeNet5Weights trainedWeights = LoadLeNet5Weights(weightsDir);
+
+    // Use loaded weights
+    auto conv1Kernel = trainedWeights.conv1_weight;
+    auto conv2Kernel = trainedWeights.conv2_weight;
+    auto dense1Weights = trainedWeights.fc1_weight;
+    auto dense2Weights = trainedWeights.fc2_weight;
+    auto dense3Weights = trainedWeights.fc3_weight;
 
     uint32_t conv1OutputHeight = 24;  // (28 - 5) / 1 + 1
     uint32_t conv1OutputWidth = 24;
@@ -491,19 +663,6 @@ void MNISTLeNet5Inference() {
     std::cout << "  AvgPool1 output: " << pool1OutputChannels << " channels, "
               << pool1OutputHeight << "x" << pool1OutputWidth << " = " << pool1FlatSize << std::endl;
 
-    // Conv2: 6 -> 16 channels, 5x5 kernel, stride=1
-    std::vector<std::vector<std::vector<std::vector<double>>>> conv2Kernel(16);
-    for (int oc = 0; oc < 16; oc++) {
-        conv2Kernel[oc].resize(6);
-        for (int ic = 0; ic < 6; ic++) {
-            conv2Kernel[oc][ic].resize(5, std::vector<double>(5, 0.0));
-            for (int i = 0; i < 5; i++) {
-                for (int j = 0; j < 5; j++) {
-                    conv2Kernel[oc][ic][i][j] = (rand() % 200 - 100) / 100.0;
-                }
-            }
-        }
-    }
     uint32_t conv2OutputHeight = 8;  // (12 - 5) / 1 + 1
     uint32_t conv2OutputWidth = 8;
     uint32_t conv2OutputChannels = 16;
@@ -533,35 +692,17 @@ void MNISTLeNet5Inference() {
     std::cout << "  AvgPool2 output: " << pool2OutputChannels << " channels, "
               << pool2OutputHeight << "x" << pool2OutputWidth << " = " << pool2FlatSize << std::endl;
 
-    // Dense layers
+    // Dense layer dimensions
     uint32_t dense1Input = pool2FlatSize;  // 256
     uint32_t dense1Output = 120;
-    std::vector<std::vector<double>> dense1Weights(dense1Output, std::vector<double>(dense1Input, 0.0));
-    for (uint32_t i = 0; i < dense1Output; i++) {
-        for (uint32_t j = 0; j < dense1Input; j++) {
-            dense1Weights[i][j] = (rand() % 200 - 100) / 200.0;
-        }
-    }
     std::cout << "  Dense1: " << dense1Input << " -> " << dense1Output << std::endl;
 
     uint32_t dense2Input = dense1Output;  // 120
     uint32_t dense2Output = 84;
-    std::vector<std::vector<double>> dense2Weights(dense2Output, std::vector<double>(dense2Input, 0.0));
-    for (uint32_t i = 0; i < dense2Output; i++) {
-        for (uint32_t j = 0; j < dense2Input; j++) {
-            dense2Weights[i][j] = (rand() % 200 - 100) / 200.0;
-        }
-    }
     std::cout << "  Dense2: " << dense2Input << " -> " << dense2Output << std::endl;
 
     uint32_t dense3Input = dense2Output;  // 84
     uint32_t dense3Output = 10;
-    std::vector<std::vector<double>> dense3Weights(dense3Output, std::vector<double>(dense3Input, 0.0));
-    for (uint32_t i = 0; i < dense3Output; i++) {
-        for (uint32_t j = 0; j < dense3Input; j++) {
-            dense3Weights[i][j] = (rand() % 200 - 100) / 200.0;
-        }
-    }
     std::cout << "  Dense3: " << dense3Input << " -> " << dense3Output << std::endl;
 
     // ========== Build Toeplitz matrices and pack into diagonals ==========
@@ -638,15 +779,6 @@ void MNISTLeNet5Inference() {
     cc->EvalRotateKeyGen(keys.secretKey, allRotations);
     std::cout << "  Rotation key generation complete!" << std::endl;
 
-    // Encode weight diagonals as plaintexts
-    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals);
-    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals);
-    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
-    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals);
-    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
-    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
-    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
-
     std::cout << "Weight preparation time: " << TOC(t) << " ms" << std::endl;
 
     // ========== Encrypt Input ==========
@@ -671,11 +803,11 @@ void MNISTLeNet5Inference() {
     }
 
     // Cleartext Conv1
-    auto clearConv1_3D = CleartextConv2D(mnistInput3D, conv1Kernel, 1, 0);
+    auto clearConv1_3D = CleartextConv2D(mnistInput3D, conv1Kernel, 1, 0, &trainedWeights.conv1_bias);
     auto clearConv1 = CleartextFlatten(clearConv1_3D);
 
-    // Cleartext ReLU1
-    auto clearReLU1 = CleartextReLU(clearConv1);
+    // Cleartext Activation1
+    auto clearReLU1 = CleartextActivation(clearConv1, activationType, trainedWeights.scale1);
 
     // Reshape for pooling
     std::vector<std::vector<std::vector<double>>> clearReLU1_3D(6,
@@ -693,11 +825,11 @@ void MNISTLeNet5Inference() {
     auto clearPool1 = CleartextFlatten(clearPool1_3D);
 
     // Cleartext Conv2
-    auto clearConv2_3D = CleartextConv2D(clearPool1_3D, conv2Kernel, 1, 0);
+    auto clearConv2_3D = CleartextConv2D(clearPool1_3D, conv2Kernel, 1, 0, &trainedWeights.conv2_bias);
     auto clearConv2 = CleartextFlatten(clearConv2_3D);
 
-    // Cleartext ReLU2
-    auto clearReLU2 = CleartextReLU(clearConv2);
+    // Cleartext Activation2
+    auto clearReLU2 = CleartextActivation(clearConv2, activationType, trainedWeights.scale2);
 
     // Reshape for pooling
     std::vector<std::vector<std::vector<double>>> clearReLU2_3D(16,
@@ -715,19 +847,19 @@ void MNISTLeNet5Inference() {
     auto clearPool2 = CleartextFlatten(clearPool2_3D);
 
     // Cleartext Dense1
-    auto clearDense1 = CleartextDense(clearPool2, dense1Weights);
+    auto clearDense1 = CleartextDense(clearPool2, dense1Weights, &trainedWeights.fc1_bias);
 
-    // Cleartext ReLU3
-    auto clearReLU3 = CleartextReLU(clearDense1);
+    // Cleartext Activation3
+    auto clearReLU3 = CleartextActivation(clearDense1, activationType, trainedWeights.scale3);
 
     // Cleartext Dense2
-    auto clearDense2 = CleartextDense(clearReLU3, dense2Weights);
+    auto clearDense2 = CleartextDense(clearReLU3, dense2Weights, &trainedWeights.fc2_bias);
 
-    // Cleartext ReLU4
-    auto clearReLU4 = CleartextReLU(clearDense2);
+    // Cleartext Activation4
+    auto clearReLU4 = CleartextActivation(clearDense2, activationType, trainedWeights.scale4);
 
     // Cleartext Dense3
-    auto clearDense3 = CleartextDense(clearReLU4, dense3Weights);
+    auto clearDense3 = CleartextDense(clearReLU4, dense3Weights, &trainedWeights.fc3_bias);
 
     std::cout << "Cleartext forward pass complete!" << std::endl;
     // ========== END CLEARTEXT FORWARD PASS ==========
@@ -739,24 +871,41 @@ void MNISTLeNet5Inference() {
 
     // Layer 1: Conv1
     std::cout << "\n[Layer 1] Conv1 (28x28x1 -> 24x24x6)..." << std::endl;
+    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals);
+    auto conv1BiasVec = PrepareBiasVector(trainedWeights.conv1_bias, conv1FlatSize, conv1OutputChannels, conv1OutputHeight * conv1OutputWidth);
+    auto ptConv1Bias = cc->MakeCKKSPackedPlaintext(conv1BiasVec);
+
     TIC(t);
     // ctInput = cc->EvalRotate(ctInput, -conv1Cols);
     auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, 2, conv1Rotations);
+
+    // Add bias
+    ctConv1 = cc->EvalAdd(ctConv1, ptConv1Bias);
+
     double conv1Time = TOC(t);
     std::cout << "  Time: " << conv1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv1->GetLevel() << std::endl;
+
+    ptConv1Diags.clear();
+    ptConv1Diags.shrink_to_fit();
 
     // Validate Conv1
     Plaintext ptConv1Result;
     cc->Decrypt(keys.secretKey, ctConv1, &ptConv1Result);
     ptConv1Result->SetLength(conv1FlatSize);
     std::vector<double> encConv1 = ptConv1Result->GetRealPackedValue();
+
+    // Print bounds BEFORE activation (input to ReLU)
+    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
+    PrintBounds(clearConv1, "    Conv1 output (cleartext)");
+    PrintBounds(encConv1, "    Conv1 output (encrypted)");
+
     CompareVectors(clearConv1, encConv1, "Conv1", 1e-1);
 
-    // Layer 2: ReLU1
-    std::cout << "\n[Layer 2] ReLU1 (scheme switching)..." << std::endl;
+    // Layer 2: Activation1
+    std::cout << "\n[Layer 2] Activation1 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU1 = EvalReLUSchemeSwitching(cc, ctConv1, keys.publicKey, conv1FlatSize, slots, scaleSignFHEW);
+    auto ctReLU1 = EvalActivation(cc, ctConv1, activationType, keys.publicKey, conv1FlatSize, slots, scaleSignFHEW, 5, -1272.325288, 861.832868, trainedWeights.scale1);
     double relu1Time = TOC(t);
     std::cout << "  Time: " << relu1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU1->GetLevel() << std::endl;
@@ -766,7 +915,14 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctReLU1, &ptReLU1Result);
     ptReLU1Result->SetLength(conv1FlatSize);
     std::vector<double> encReLU1 = ptReLU1Result->GetRealPackedValue();
+
+    // Print bounds for Chebyshev tuning
+    PrintBounds(clearReLU1, "Activation1 (cleartext)");
+    PrintBounds(encReLU1, "Activation1 (encrypted)");
+
     CompareVectors(clearReLU1, encReLU1, "ReLU1", 1e-1);
+
+    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals);
 
     // Layer 3: AvgPool1
     std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6)..." << std::endl;
@@ -784,12 +940,23 @@ void MNISTLeNet5Inference() {
     std::vector<double> encPool1 = ptPool1Result->GetRealPackedValue();
     CompareVectors(clearPool1, encPool1, "AvgPool1", 1e-1);
 
+    ptPool1Diags.clear();
+    ptPool1Diags.shrink_to_fit();
+
+    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
+    auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2FlatSize, conv2OutputChannels, conv2OutputHeight * conv2OutputWidth);
+    auto ptConv2Bias = cc->MakeCKKSPackedPlaintext(conv2BiasVec);
+
     // Layer 4: Conv2
     std::cout << "\n[Layer 4] Conv2 (12x12x6 -> 8x8x16)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
-    cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols * 2));
+    cc->EvalAddInPlace(ctPool1, cc->EvalRotate(cc->EvalRotate(ctPool1, -conv2Cols), -conv2Cols));
     auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, 2, conv2Rotations);
+
+    // Add bias
+    ctConv2 = cc->EvalAdd(ctConv2, ptConv2Bias);
+
     double conv2Time = TOC(t);
     std::cout << "  Time: " << conv2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv2->GetLevel() << std::endl;
@@ -799,12 +966,21 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctConv2, &ptConv2Result);
     ptConv2Result->SetLength(conv2FlatSize);
     std::vector<double> encConv2 = ptConv2Result->GetRealPackedValue();
+
+    // Print bounds BEFORE activation
+    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
+    PrintBounds(clearConv2, "    Conv2 output (cleartext)");
+    PrintBounds(encConv2, "    Conv2 output (encrypted)");
+
     CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
 
-    // Layer 5: ReLU2
-    std::cout << "\n[Layer 5] ReLU2 (scheme switching)..." << std::endl;
+    ptConv2Diags.clear();
+    ptConv2Diags.shrink_to_fit();
+
+    // Layer 5: Activation2
+    std::cout << "\n[Layer 5] Activation2 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU2 = EvalReLUSchemeSwitching(cc, ctConv2, keys.publicKey, conv2FlatSize, slots, scaleSignFHEW);
+    auto ctReLU2 = EvalActivation(cc, ctConv2, activationType, keys.publicKey, conv2FlatSize, slots, scaleSignFHEW, 5, -1657.532905, 1155.935255, trainedWeights.scale2);
     double relu2Time = TOC(t);
     std::cout << "  Time: " << relu2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU2->GetLevel() << std::endl;
@@ -814,7 +990,14 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctReLU2, &ptReLU2Result);
     ptReLU2Result->SetLength(conv2FlatSize);
     std::vector<double> encReLU2 = ptReLU2Result->GetRealPackedValue();
+
+    // Print bounds for Chebyshev tuning
+    PrintBounds(clearReLU2, "Activation2 (cleartext)");
+    PrintBounds(encReLU2, "Activation2 (encrypted)");
+
     CompareVectors(clearReLU2, encReLU2, "ReLU2", 1e-1);
+
+    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals);
 
     // Layer 6: AvgPool2
     std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16)..." << std::endl;
@@ -832,11 +1015,22 @@ void MNISTLeNet5Inference() {
     std::vector<double> encPool2 = ptPool2Result->GetRealPackedValue();
     CompareVectors(clearPool2, encPool2, "AvgPool2", 1e-1);
 
+    ptPool2Diags.clear();
+    ptPool2Diags.shrink_to_fit();
+
+    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
+    auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
+    auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
+
     // Layer 7: Dense1
     std::cout << "\n[Layer 7] Dense1 (256 -> 120)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
     auto ctDense1 = EvalMultMatVecDiag(ctPool2, ptDense1Diags, 2, dense1Rotations);
+
+    // Add bias
+    ctDense1 = cc->EvalAdd(ctDense1, ptDense1Bias);
+
     double dense1Time = TOC(t);
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense1->GetLevel() << std::endl;
@@ -846,12 +1040,21 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctDense1, &ptDense1Result);
     ptDense1Result->SetLength(dense1Output);
     std::vector<double> encDense1 = ptDense1Result->GetRealPackedValue();
+
+    // Print bounds BEFORE activation
+    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
+    PrintBounds(clearDense1, "    Dense1 output (cleartext)");
+    PrintBounds(encDense1, "    Dense1 output (encrypted)");
+
     CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
 
-    // Layer 8: ReLU3
-    std::cout << "\n[Layer 8] ReLU3 (scheme switching)..." << std::endl;
+    ptDense1Diags.clear();
+    ptDense1Diags.shrink_to_fit();
+
+    // Layer 8: Activation3
+    std::cout << "\n[Layer 8] Activation3 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU3 = EvalReLUSchemeSwitching(cc, ctDense1, keys.publicKey, dense1Output, slots, scaleSignFHEW);
+    auto ctReLU3 = EvalActivation(cc, ctDense1, activationType, keys.publicKey, dense1Output, slots, scaleSignFHEW, 5, -1147.812610, 677.169142, trainedWeights.scale3);
     double relu3Time = TOC(t);
     std::cout << "  Time: " << relu3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU3->GetLevel() << std::endl;
@@ -861,13 +1064,26 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctReLU3, &ptReLU3Result);
     ptReLU3Result->SetLength(dense1Output);
     std::vector<double> encReLU3 = ptReLU3Result->GetRealPackedValue();
+
+    // Print bounds for Chebyshev tuning
+    PrintBounds(clearReLU3, "Activation3 (cleartext)");
+    PrintBounds(encReLU3, "Activation3 (encrypted)");
+
     CompareVectors(clearReLU3, encReLU3, "ReLU3", 1e-1);
+
+    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
+    auto dense2BiasVec = PrepareBiasVector(trainedWeights.fc2_bias, dense2Output);
+    auto ptDense2Bias = cc->MakeCKKSPackedPlaintext(dense2BiasVec);
 
     // Layer 9: Dense2
     std::cout << "\n[Layer 9] Dense2 (120 -> 84)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
     auto ctDense2 = EvalMultMatVecDiag(ctReLU3, ptDense2Diags, 2, dense2Rotations);
+
+    // Add bias
+    ctDense2 = cc->EvalAdd(ctDense2, ptDense2Bias);
+
     double dense2Time = TOC(t);
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense2->GetLevel() << std::endl;
@@ -877,7 +1093,16 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctDense2, &ptDense2Result);
     ptDense2Result->SetLength(dense2Output);
     std::vector<double> encDense2 = ptDense2Result->GetRealPackedValue();
+
+    // Print bounds BEFORE activation
+    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
+    PrintBounds(clearDense2, "    Dense2 output (cleartext)");
+    PrintBounds(encDense2, "    Dense2 output (encrypted)");
+
     CompareVectors(clearDense2, encDense2, "Dense2", 1e-1);
+
+    ptDense2Diags.clear();
+    ptDense2Diags.shrink_to_fit();
 
     // DEBUG: Print Dense2 values at indices that will fail in ReLU4
     if (DEBUG_MODE) {
@@ -891,10 +1116,10 @@ void MNISTLeNet5Inference() {
         }
     }
 
-    // Layer 10: ReLU4
-    std::cout << "\n[Layer 10] ReLU4 (scheme switching)..." << std::endl;
+    // Layer 10: Activation4
+    std::cout << "\n[Layer 10] Activation4 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU4 = EvalReLUSchemeSwitching(cc, ctDense2, keys.publicKey, dense2Output, slots, scaleSignFHEW);
+    auto ctReLU4 = EvalActivation(cc, ctDense2, activationType, keys.publicKey, dense2Output, slots, scaleSignFHEW, 5, -318.306115, 331.310290, trainedWeights.scale4);
     double relu4Time = TOC(t);
     std::cout << "  Time: " << relu4Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU4->GetLevel() << std::endl;
@@ -904,13 +1129,26 @@ void MNISTLeNet5Inference() {
     cc->Decrypt(keys.secretKey, ctReLU4, &ptReLU4Result);
     ptReLU4Result->SetLength(dense2Output);
     std::vector<double> encReLU4 = ptReLU4Result->GetRealPackedValue();
+
+    // Print bounds for Chebyshev tuning
+    PrintBounds(clearReLU4, "Activation4 (cleartext)");
+    PrintBounds(encReLU4, "Activation4 (encrypted)");
+
     CompareVectors(clearReLU4, encReLU4, "ReLU4", 1e-1);
+
+    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
+    auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
+    auto ptDense3Bias = cc->MakeCKKSPackedPlaintext(dense3BiasVec);
 
     // Layer 11: Dense3
     std::cout << "\n[Layer 11] Dense3 (84 -> 10)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
     auto ctOutput = EvalMultMatVecDiag(ctReLU4, ptDense3Diags, 2, dense3Rotations);
+
+    // Add bias
+    ctOutput = cc->EvalAdd(ctOutput, ptDense3Bias);
+
     double dense3Time = TOC(t);
     std::cout << "  Time: " << dense3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctOutput->GetLevel() << std::endl;
@@ -921,6 +1159,9 @@ void MNISTLeNet5Inference() {
     ptDense3Result->SetLength(dense3Output);
     std::vector<double> encDense3 = ptDense3Result->GetRealPackedValue();
     CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
+
+    ptDense3Diags.clear();
+    ptDense3Diags.shrink_to_fit();
 
     double totalInferenceTime = conv1Time + relu1Time + pool1Time + conv2Time + relu2Time +
                                 pool2Time + dense1Time + relu3Time + dense2Time + relu4Time + dense3Time;
@@ -983,7 +1224,36 @@ void MNISTLeNet5Inference() {
 
 int main(int argc, char* argv[]) {
     try {
-        MNISTLeNet5Inference();
+        int sampleIndex = 8;  // Default to sample 8 (label 5)
+        ActivationType activationType = ActivationType::SCHEME_SWITCH;  // Default
+
+        // Parse command line arguments
+        if (argc > 1) {
+            sampleIndex = std::atoi(argv[1]);
+            if (sampleIndex < 0 || sampleIndex > 9999) {
+                std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
+                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type]" << std::endl;
+                std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
+                return 1;
+            }
+        }
+
+        if (argc > 2) {
+            std::string activationStr = argv[2];
+            if (activationStr == "scheme") {
+                activationType = ActivationType::SCHEME_SWITCH;
+            } else if (activationStr == "cheby") {
+                activationType = ActivationType::CHEBYSHEV;
+            } else if (activationStr == "square") {
+                activationType = ActivationType::SQUARE;
+            } else {
+                std::cerr << "Error: Unknown activation type '" << activationStr << "'" << std::endl;
+                std::cerr << "Valid options: scheme, cheby, square" << std::endl;
+                return 1;
+            }
+        }
+
+        MNISTLeNet5Inference(sampleIndex, activationType);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;

@@ -67,9 +67,11 @@ std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matr
                 babyStep = ceil(sqrt(matrix_height));
             } 
             for (uint32_t diag_idx = 0; diag_idx < babyStep; ++diag_idx) {
+                // std::cout << diag_idx << std::endl;
                 rotations.push_back(diag_idx);
             }
             for (uint32_t diag_idx = babyStep; diag_idx < matrix_height; diag_idx+=babyStep) {
+                // std::cout << diag_idx << std::endl;
                 rotations.push_back(diag_idx);
             }
             break;
@@ -91,6 +93,8 @@ std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matr
             break;
         }
     }
+
+    // std::cout << (int32_t)matrix_height * -1 << std::endl;
 
     rotations.push_back((int32_t)matrix_height * -1);
 
@@ -533,6 +537,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
 
             std::vector<Ciphertext<DCRTPoly>> fastRotation(babyStep);
             for (uint32_t j = 0; j < babyStep; j++) {
+                // std::cout << j << std::endl;
                 fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);
             }
 
@@ -568,6 +573,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                 if (i == 0) {
                     ctResult = cryptoContext->EvalFastRotation(inner, 0, M, innerDigits);
                 } else {
+                    // std::cout << i * babyStep << std::endl;
                     auto rotated = cryptoContext->EvalFastRotation(inner, i * babyStep, M, innerDigits);
                     cryptoContext->EvalAddInPlace(ctResult, rotated);
                 }
