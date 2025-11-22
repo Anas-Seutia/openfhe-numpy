@@ -11,7 +11,7 @@ using namespace lbcrypto;
 
 /**
  * @brief Diagonalize a matrix for FHE operations
- * 
+ *
  * @param matrix Input matrix (H x W)
  * @param num_slots Total number of slots to fill (must be power of two)
  * @return Toeplitz matrix representation as 2D vector
@@ -33,9 +33,9 @@ std::vector<std::vector<T>> PackMatDiagWise(
  * @return List of diagonal indices for rotation key generation
  */
 std::vector<int32_t> getOptimalRots(
-    const std::vector<std::vector<double>> &matrix, 
+    const std::vector<std::vector<double>> &matrix,
     std::vector<bool>* nonzero_mask = nullptr,
-    bool BSGSmode = false, 
+    bool BSGSmode = false,
     uint32_t babyStep = 0
 );
 
@@ -51,7 +51,7 @@ struct DiagonalResult {
 
 /**
  * @brief Diagonalize a blocked matrix for FHE operations
- * 
+ *
  * @param matrix Input matrix (H x W)
  * @param block_width Width size of SIMD plaintext blocks
  * @param embed_method Embedding method ["hybrid"(plaintext), "standard" (ciphertext)], use "standard" for fully connected
@@ -68,7 +68,7 @@ DiagonalResult<T> PackBlockMatDiagWise(
 
 /**
  * @brief Construct Toeplitz matrix for 2D convolution
- * 
+ *
  * @param kernel Input kernel (Co x Ci x kH x kW)
  * @param input_height Input height (Hi)
  * @param input_width Input width (Wi)
@@ -148,9 +148,8 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(
 * @return Vectors of encoded CKKS plaintexts.
 */
 std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(
-    const CryptoContextCKKSRNS::ContextType &cc, 
-    const std::vector<std::vector<double>>& vectors,
-    std::vector<bool>* nonzero_mask = nullptr
+    const CryptoContextCKKSRNS::ContextType &cc,
+    const std::vector<std::vector<double>>& vectors
 );
 
 /**
@@ -165,10 +164,9 @@ std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(
 * @return Vectors of encoded CKKS ciphertexts.
 */
 std::vector<Ciphertext<DCRTPoly>> EncryptVectors(
-    const CryptoContextCKKSRNS::ContextType &cc, 
-    const PublicKey<DCRTPoly>& publicKey, 
-    const std::vector<Plaintext>& ptvectors,
-    std::vector<bool>* nonzero_mask = nullptr
+    const CryptoContextCKKSRNS::ContextType &cc,
+    const PublicKey<DCRTPoly>& publicKey,
+    const std::vector<Plaintext>& ptvectors
 );
 
 #endif  // __CONV_HELPER_FUNCTION_H__

@@ -12,41 +12,41 @@ template <typename T>
 std::vector<std::vector<T>> PackMatDiagWise(
     const std::vector<std::vector<T>> &matrix,
     const std::size_t &num_slots) {
-    
+
     // Check input parameters
     uint32_t matrix_height = matrix.size();
     uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
 
     std::vector<std::vector<T>> diagonals;
-    
+
     if (!IsPowerOfTwo(num_slots)) {
         OPENFHE_THROW("NumSlots must be a power of two");
     }
-    
+
     // Check size constraints
     if (num_slots < matrix_width) {
         OPENFHE_THROW("size is bigger than total slots");
     }
-    
+
     if (matrix_height == 1) {
         std::vector<std::vector<T>> vector = {matrix[0]};
         return vector;
     }
-    
+
     for (uint32_t diag_idx = 0; diag_idx < matrix_width; ++diag_idx) {
         std::vector<T> diagonal(num_slots, 0.0);
-        
+
         // Extract diagonal values
         for (uint32_t n = 0; n < matrix_height; ++n) {
             // Compute row and column indices with wrapping
             uint32_t row = n;
             uint32_t col = (diag_idx + n) % matrix_width;
-            
+
             if (row < matrix_height && col < matrix_width) {
                 diagonal[n] = matrix[row][col];
             }
         }
-        
+
         diagonals.push_back(diagonal);
     }
 
@@ -144,27 +144,27 @@ DiagonalResult<T> PackBlockMatDiagWise(
     const std::size_t &block_width,
     const std::string& embed_method,
     const std::size_t &num_slots) {
-    
+
     // Check input parameters
     uint32_t matrix_height = matrix.size();
     uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
-    
+
     DiagonalResult<T> result;
-    
+
     // Check power of two constraints
     if (!IsPowerOfTwo(block_width)) {
         OPENFHE_THROW("BlockSize must be a power of two");
     }
-    
+
     if (!IsPowerOfTwo(num_slots)) {
         OPENFHE_THROW("NumSlots must be a power of two");
     }
-    
+
     // Check size constraints
     if (num_slots < matrix_height * matrix_width) {
         OPENFHE_THROW("size is bigger than total slots");
     }
-    
+
     if (matrix_height == 1) {
         if (num_slots / block_width > 1) {
             OPENFHE_THROW("vector is too long, can't duplicate");
@@ -173,15 +173,15 @@ DiagonalResult<T> PackBlockMatDiagWise(
         result.output_rotations = 0;
         return result;
     }
-    
+
     if (num_slots % (block_width * block_width) != 0) {
         OPENFHE_THROW("num_slots % block_size must equal 0");
     }
-    
+
     uint32_t num_block_rows = std::ceil((double)matrix_height / block_width);
     uint32_t num_block_cols = std::ceil((double)matrix_width / block_width);
-    
-    
+
+
     // Determine block height and output rotations
     uint32_t block_height;
     if (num_block_rows == 1 && embed_method == "hybrid") {
@@ -215,21 +215,21 @@ DiagonalResult<T> PackBlockMatDiagWise(
         for (uint32_t block_col = 0; block_col < num_block_cols; ++block_col) {
             uint32_t row_start = block_height * block_row;
             uint32_t col_start = block_width * block_col;
-            
+
             // Extract a block from the matrix
             std::vector<std::vector<T>> block(block_height, std::vector<T>(block_width, 0.0));
             for (uint32_t i = 0; i < block_height; ++i) {
                 for (uint32_t j = 0; j < block_width; ++j) {
                     uint32_t row = row_start + i;
                     uint32_t col = col_start + j;
-                    
+
                     if (row < matrix.size() && col < matrix[0].size()) {
                         block[i][j] = matrix[row][col];
                     }
                 }
             }
-            
-            
+
+
             // Extract generalized diagonals from a block (row)
             std::vector<uint32_t> row_idx;
             uint32_t repeat_count = block_width / block_height;
@@ -238,7 +238,7 @@ DiagonalResult<T> PackBlockMatDiagWise(
                     row_idx.push_back(i);
                 }
             }
-            
+
             // Extract generalized diagonals from a block (col)
             std::vector<std::vector<uint32_t>> col_idx(block_height, std::vector<uint32_t>(block_width));
             for (uint32_t i = 0; i < block_height; ++i) {
@@ -247,14 +247,14 @@ DiagonalResult<T> PackBlockMatDiagWise(
                     col_idx[i][j] = (idx >= block_width) ? (idx - block_width) : idx;
                 }
             }
-            
+
             // Extract diagonals using the computed indices
             std::vector<std::vector<T>> block_diagonals(block_height, std::vector<T>(block_width));
             for (uint32_t i = 0; i < block_height; ++i) {
                 for (uint32_t j = 0; j < block_width; ++j) {
                     uint32_t row = row_idx[j];
                     uint32_t col = col_idx[i][j];
-                    
+
                     if (row < block.size() && col < block[0].size()) {
                         block_diagonals[i][j] = block[row][col];
                     } else {
@@ -262,7 +262,7 @@ DiagonalResult<T> PackBlockMatDiagWise(
                     }
                 }
             }
-            
+
             // Collect non-zero diagonals
             std::map<uint32_t, std::vector<T>> nonzero_diagonals;
             for (uint32_t i = 0; i < block_height; ++i) {
@@ -273,19 +273,19 @@ DiagonalResult<T> PackBlockMatDiagWise(
                         break;
                     }
                 }
-                
+
                 if (is_nonzero) {
                     nonzero_diagonals[i] = block_diagonals[i];
                 }
             }
-            
+
             // If no non-zero diagonals, add a zero diagonal
             if (nonzero_diagonals.empty()) {
                 nonzero_diagonals[0] = std::vector<T>(block_width, 0.0);
             }
-            
+
             total_diagonals += nonzero_diagonals.size();
-            
+
             // Store in result
             for (const auto& i : nonzero_diagonals) {
                 result.diagonals_by_block[{block_row, block_col}][i.first] = i.second;
@@ -300,8 +300,8 @@ template DiagonalResult<double> PackBlockMatDiagWise(std::vector<std::vector<dou
 template <typename T>
 std::vector<std::vector<T>> ConstructConv2DToeplitz(
     const std::vector<std::vector<std::vector<std::vector<T>>>>& kernel,
-    const uint32_t &input_height, 
-    const uint32_t &input_width,  
+    const uint32_t &input_height,
+    const uint32_t &input_width,
     const uint32_t &stride,
     const uint32_t &padding,
     const uint32_t &dilation,
@@ -312,14 +312,14 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     const uint32_t in_channels = kernel[0].size();
     const uint32_t kernel_height = kernel[0][0].size();
     const uint32_t kernel_width = kernel[0][0][0].size();
-    
+
     // Compute output dimensions after convolution
     uint32_t output_height, output_width;
     output_height = (input_height + 2*padding -
                     dilation*(kernel_height-1) - 1) / stride + 1;
     output_width = (input_width + 2*padding -
                     dilation*(kernel_width-1) - 1) / stride + 1;
-    
+
     // Compute multiplexed input dimensions
     // With input_gap, input channels are packed into spatial dimensions
     uint32_t input_gap_squared = input_gap * input_gap;
@@ -343,7 +343,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
 
     // Using map for sparse representation (row -> col -> value)
     std::map<uint32_t, std::map<uint32_t, T>> sparse_matrix;
-    
+
     // Create index grid for the multiplexed padded input image
     std::vector<std::vector<std::vector<uint32_t>>> valid_image_indices(super_in_channels);
     uint32_t idx = 0;
@@ -357,7 +357,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             }
         }
     }
-    
+
     // Flatten kernel for easier access
     std::vector<std::vector<T>> flat_kernel(
         out_channels,
@@ -376,7 +376,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             }
         }
     }
-    
+
     // Compute initial kernel position (which input pixels the kernel initially touches)
     // Map from logical input channels to multiplexed physical positions
     std::vector<uint32_t> initial_kernel_position;
@@ -404,7 +404,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             }
         }
     }
-    
+
     // Compute input starting positions for each output position
     // Map logical output positions to physical input positions in multiplexed layout
     std::vector<uint32_t> input_start_indices;
@@ -417,7 +417,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             input_start_indices.push_back(valid_image_indices[0][physical_h][physical_w]);
         }
     }
-    
+
     // Populate the Toeplitz matrix
     uint32_t pos_idx = 0;
     for (uint32_t h = 0; h < output_height; ++h) {
@@ -452,7 +452,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             pos_idx++;
         }
     }
-    
+
     // Remove padding columns (keep only non-padded input positions in multiplexed layout)
     std::vector<uint32_t> image_indices_flat;
     for (uint32_t c = 0; c < super_in_channels; ++c) {
@@ -466,13 +466,13 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
     // Build final dense matrix with unpadded columns (multiplexed dimensions)
     uint32_t final_n_cols = super_in_channels * final_input_height * final_input_width;
     std::vector<std::vector<T>> toeplitz(n_rows, std::vector<T>(final_n_cols, 0.0));
-    
+
     for (const auto& row_entry : sparse_matrix) {
         uint32_t row = row_entry.first;
         for (const auto& col_entry : row_entry.second) {
             uint32_t original_col = col_entry.first;
             T value = col_entry.second;
-            
+
             // Find new column index in unpadded matrix
             auto it = std::find(image_indices_flat.begin(), image_indices_flat.end(), original_col);
             if (it != image_indices_flat.end()) {
@@ -481,7 +481,7 @@ std::vector<std::vector<T>> ConstructConv2DToeplitz(
             }
         }
     }
-    
+
     return toeplitz;
 }
 template std::vector<std::vector<double>> ConstructConv2DToeplitz(
@@ -573,7 +573,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                                         uint32_t hoistingMode,
                                         std::vector<int32_t>& rotations,
                                         uint32_t babyStep,
-                                        const std::vector<bool>* nonzero_mask) { 
+                                        const std::vector<bool>* nonzero_mask) {
 
     if (rotations.empty()) {
         rotations.reserve(diagonals.size());
@@ -590,9 +590,19 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
 
     switch (hoistingMode) {
         case 0: {
-            for (const int32_t rotation : rotations) {     
+            for (const int32_t rotation : rotations) {
                 ctRotated = cryptoContext->EvalRotate(ctVector, static_cast<int32_t>(rotation));
-                ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+
+                // Handle different diagonal types
+                if constexpr (std::is_same<T, std::vector<double>>::value) {
+                    // Encode raw vector before multiplication
+                    auto encoded = cryptoContext->MakeCKKSPackedPlaintext(diagonals[rotation]);
+                    ctProduct = cryptoContext->EvalMult(ctRotated, encoded);
+                } else {
+                    // Ciphertext or Plaintext - use directly
+                    ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+                }
+
                 if (first) {
                     ctResult = ctProduct;
                     first = false;
@@ -608,7 +618,17 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
             for (const int32_t rotation : rotations) {
                 if (rotation < 0) break;
                 ctRotated = cryptoContext->EvalFastRotation(ctVector, rotation, M, precomp);
-                ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+
+                // Handle different diagonal types
+                if constexpr (std::is_same<T, std::vector<double>>::value) {
+                    // Encode raw vector before multiplication
+                    auto encoded = cryptoContext->MakeCKKSPackedPlaintext(diagonals[rotation]);
+                    ctProduct = cryptoContext->EvalMult(ctRotated, encoded);
+                } else {
+                    // Ciphertext or Plaintext - use directly
+                    ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+                }
+
                 if (first) {
                     ctResult = ctProduct;
                     first = false;
@@ -652,10 +672,21 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                     int32_t jdx = static_cast<int32_t>(babyStep * i * -1);
                     Ciphertext<DCRTPoly> ctProduct;
                     if constexpr (std::is_same<T, Ciphertext<DCRTPoly>>::value) {
+                        // Diagonal is a ciphertext - rotate and multiply
                         auto preRotated = cryptoContext->EvalRotate(diagonals[idx], jdx);
                         ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
-                    } else {
+                    } else if constexpr (std::is_same<T, Plaintext>::value) {
+                        // Diagonal is plaintext - extract values, rotate, encode, multiply
                         std::vector<std::complex<double>> vecDiag = diagonals[idx]->GetCKKSPackedValue();
+                        auto rotatedVec = lbcrypto::Rotate(vecDiag, jdx);
+                        auto preRotated = cryptoContext->MakeCKKSPackedPlaintext(rotatedVec);
+                        ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
+                    } else {
+                        // Diagonal is raw vector<double> - convert to complex, rotate, encode, multiply
+                        std::vector<std::complex<double>> vecDiag(diagonals[idx].size());
+                        for (size_t k = 0; k < diagonals[idx].size(); ++k) {
+                            vecDiag[k] = std::complex<double>(diagonals[idx][k], 0.0);
+                        }
                         auto rotatedVec = lbcrypto::Rotate(vecDiag, jdx);
                         auto preRotated = cryptoContext->MakeCKKSPackedPlaintext(rotatedVec);
                         ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
@@ -692,21 +723,22 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
 }
 template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Ciphertext<DCRTPoly>>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep, const std::vector<bool>* nonzero_mask);
 template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Plaintext>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep, const std::vector<bool>* nonzero_mask);
+template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<std::vector<double>>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep, const std::vector<bool>* nonzero_mask);
 
-std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors, std::vector<bool>* nonzero_mask) {
+std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors) {
     std::vector<Plaintext> ptVectors(vectors.size());
     #pragma omp parallel for
     for (uint32_t i = 0; i < vectors.size(); i++) {
-        if (nonzero_mask != nullptr && (*nonzero_mask)[i]) ptVectors[i] = cc->MakeCKKSPackedPlaintext(vectors[i]);
+        ptVectors[i] = cc->MakeCKKSPackedPlaintext(vectors[i]);
     }
     return ptVectors;
 }
 
-std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& ptvectors, std::vector<bool>* nonzero_mask) {
+std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& ptvectors) {
     std::vector<Ciphertext<DCRTPoly>> ctVectors(ptvectors.size());
     #pragma omp parallel for
     for (uint32_t i = 0; i < ptvectors.size(); i++) {
-        if (nonzero_mask != nullptr && (*nonzero_mask)[i]) ctVectors[i] = cc->Encrypt(publicKey, ptvectors[i]);
+        ctVectors[i] = cc->Encrypt(publicKey, ptvectors[i]);
     }
     return ctVectors;
 }

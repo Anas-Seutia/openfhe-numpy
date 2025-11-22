@@ -911,7 +911,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     // Layer 1: Conv1
     std::cout << "\n[Layer 1] Conv1 (28x28x1 -> 24x24x6)..." << std::endl;
-    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals, &conv1NonZeros);
+    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals);
     auto conv1BiasVec = PrepareBiasVector(trainedWeights.conv1_bias, conv1FlatSize, conv1OutputChannels, conv1OutputHeight * conv1OutputWidth);
     auto ptConv1Bias = cc->MakeCKKSPackedPlaintext(conv1BiasVec);
 
@@ -955,7 +955,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearReLU1, encReLU1, "Activation1", 1e-1);
     }
 
-    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals, &pool1NonZeros);
+    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals);
 
     // Layer 3: AvgPool1
     std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6";
@@ -999,7 +999,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals, &conv2NonZeros);
+    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
     auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2_multiplexed_size, conv2OutputChannels,
                                           conv2OutputHeight * conv2OutputWidth, conv2_output_gap,
                                           conv2OutputHeight, conv2OutputWidth);
@@ -1056,7 +1056,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearReLU2, encReLU2, "Activation2", 1e-1);
     }
 
-    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals, &pool2NonZeros);
+    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals);
 
     // Layer 6: AvgPool2
     std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16";
@@ -1100,7 +1100,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals, &dense1NonZeros);
+    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
     auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
     auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
 
@@ -1161,7 +1161,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals, &dense2NonZeros);
+    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
     auto dense2BiasVec = PrepareBiasVector(trainedWeights.fc2_bias, dense2Output);
     auto ptDense2Bias = cc->MakeCKKSPackedPlaintext(dense2BiasVec);
 
@@ -1222,7 +1222,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals, &dense3NonZeros);
+    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
     auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
     auto ptDense3Bias = cc->MakeCKKSPackedPlaintext(dense3BiasVec);
 

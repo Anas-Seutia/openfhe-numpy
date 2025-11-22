@@ -644,9 +644,10 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     // Encode weight diagonals as plaintexts (not encrypted)
     // Standard approach for neural network inference: encrypted input + plaintext weights
-    auto ptConvDiags = MakeCKKSPackedPlaintextVectors(cc, convDiagonals, &convNonZeros);
-    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals, &dense1NonZeros);
-    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals, &dense2NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoding
+    // auto ptConvDiags = MakeCKKSPackedPlaintextVectors(cc, convDiagonals);
+    // auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
+    // auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
 
     std::cout << "Weight preparation time: " << TOC(t) << " ms" << std::endl;
 
@@ -712,7 +713,8 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     auto ptConvBias = cc->MakeCKKSPackedPlaintext(convBiasVec);
 
     TIC(t);
-    auto ctConvOut = EvalMultMatVecDiag(ctInput, ptConvDiags, 2, convRotations, 0, &convNonZeros);
+    // TESTING: Pass raw diagonals instead of encoded plaintexts
+    auto ctConvOut = EvalMultMatVecDiag(ctInput, convDiagonals, 2, convRotations, 0, &convNonZeros);
     ctConvOut = cc->EvalAdd(ctConvOut, ptConvBias);
 
     double convTime = TOC(t);
@@ -767,7 +769,8 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     TIC(t);
     cc->EvalAddInPlace(ctAct1, cc->EvalRotate(ctAct1, -dense1Cols));
-    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, ptDense1Diags, 2, dense1Rotations, 0, &dense1NonZeros);
+    // TESTING: Pass raw diagonals instead of encoded plaintexts
+    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, dense1Diagonals, 2, dense1Rotations, 0, &dense1NonZeros);
     ctDense1Out = cc->EvalAdd(ctDense1Out, ptDense1Bias);
 
     double dense1Time = TOC(t);
@@ -822,7 +825,8 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     TIC(t);
     cc->EvalAddInPlace(ctAct2, cc->EvalRotate(ctAct2, -dense2Cols));
-    auto ctOutput = EvalMultMatVecDiag(ctAct2, ptDense2Diags, 2, dense2Rotations, 0, &dense2NonZeros);
+    // TESTING: Pass raw diagonals instead of encoded plaintexts
+    auto ctOutput = EvalMultMatVecDiag(ctAct2, dense2Diagonals, 2, dense2Rotations, 0, &dense2NonZeros);
     ctOutput = cc->EvalAdd(ctOutput, ptDense2Bias);
 
     double dense2Time = TOC(t);
