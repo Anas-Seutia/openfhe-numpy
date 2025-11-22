@@ -49,13 +49,6 @@ inline std::vector<double> Load1DWeights(const std::string& binPath, const std::
     binFile.read(reinterpret_cast<char*>(weights.data()), totalSize * sizeof(double));
     binFile.close();
 
-    std::cout << "Loaded weights from " << binPath << " with shape: [";
-    for (size_t i = 0; i < shape.size(); i++) {
-        std::cout << shape[i];
-        if (i < shape.size() - 1) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
-
     return weights;
 }
 
@@ -89,9 +82,6 @@ inline std::vector<std::vector<double>> Load2DWeights(const std::string& binPath
             weights[i][j] = flat_weights[i * in_features + j];
         }
     }
-
-    std::cout << "Loaded 2D weights from " << binPath << " with shape: ["
-              << out_features << ", " << in_features << "]" << std::endl;
 
     return weights;
 }
@@ -147,10 +137,6 @@ inline std::vector<std::vector<std::vector<std::vector<double>>>> Load4DWeights(
         }
     }
 
-    std::cout << "Loaded 4D conv weights from " << binPath << " with shape: ["
-              << out_channels << ", " << in_channels << ", "
-              << kernel_h << ", " << kernel_w << "]" << std::endl;
-
     return weights;
 }
 
@@ -181,9 +167,6 @@ struct LeNet5Weights {
 
 inline LeNet5Weights LoadLeNet5Weights(const std::string& weightsDir) {
     LeNet5Weights weights;
-
-    std::cout << "\nLoading LeNet-5 weights from: " << weightsDir << std::endl;
-    std::cout << std::string(80, '-') << std::endl;
 
     // Load convolutional layers
     weights.conv1_weight = Load4DWeights(
@@ -251,17 +234,10 @@ inline LeNet5Weights LoadLeNet5Weights(const std::string& weightsDir) {
         if (!scale4_vec.empty()) weights.scale4 = scale4_vec[0];
         weights.has_scales = true;
 
-        std::cout << "Loaded scale factors: scale1=" << weights.scale1
-                  << ", scale2=" << weights.scale2
-                  << ", scale3=" << weights.scale3
-                  << ", scale4=" << weights.scale4 << std::endl;
     } catch (const std::exception& e) {
         // No scales - this is normal for ReLU models
         weights.has_scales = false;
     }
-
-    std::cout << std::string(80, '-') << std::endl;
-    std::cout << "Successfully loaded all LeNet-5 weights!" << std::endl;
 
     return weights;
 }
@@ -293,8 +269,6 @@ inline std::vector<std::vector<double>> LoadMNISTImage(const std::string& imageP
         }
     }
 
-    std::cout << "Loaded MNIST image from " << imagePath << " (28x28)" << std::endl;
-
     return image;
 }
 
@@ -319,9 +293,6 @@ struct LoLaWeights {
 
 inline LoLaWeights LoadLoLaWeights(const std::string& weightsDir) {
     LoLaWeights weights;
-
-    std::cout << "\nLoading LoLa weights from: " << weightsDir << std::endl;
-    std::cout << std::string(80, '-') << std::endl;
 
     // Load convolutional layer
     weights.conv1_weight = Load4DWeights(
@@ -367,15 +338,10 @@ inline LoLaWeights LoadLoLaWeights(const std::string& weightsDir) {
         if (!scale2_vec.empty()) weights.scale2 = scale2_vec[0];
         weights.has_scales = true;
 
-        std::cout << "Loaded scale factors: scale1=" << weights.scale1
-                  << ", scale2=" << weights.scale2 << std::endl;
     } catch (const std::exception& e) {
         // No scales - this is normal for ReLU models
         weights.has_scales = false;
     }
-
-    std::cout << std::string(80, '-') << std::endl;
-    std::cout << "Successfully loaded all LoLa weights!" << std::endl;
 
     return weights;
 }

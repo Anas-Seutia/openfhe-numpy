@@ -54,39 +54,76 @@ std::vector<std::vector<T>> PackMatDiagWise(
 }
 template std::vector<std::vector<double>> PackMatDiagWise(const std::vector<std::vector<double>> &matrix, const std::size_t &num_slots);
 
-std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix, bool BSGSmode, uint32_t babyStep) {
+std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix, std::vector<bool>* nonzero_mask, bool BSGSmode, uint32_t babyStep) {
     // Check input parameters
-    
+
     uint32_t matrix_height = matrix.size();
     uint32_t matrix_width = matrix.empty() ? 0 : matrix[0].size();
     std::vector<int32_t> rotations;
-    
+
+    // Helper lambda to check if a diagonal is non-zero
+    auto isDiagonalNonZero = [&](uint32_t idx) -> bool {
+        if (idx >= matrix_height) return false;
+        for (uint32_t n = 0; n < matrix_width; ++n) {
+            if (std::abs(matrix[idx][n]) > 1e-10) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Populate nonzero_mask for ALL diagonals (outside switch case)
+    if (nonzero_mask != nullptr) {
+        nonzero_mask->clear();
+        nonzero_mask->reserve(matrix_height);
+        for (uint32_t diag_idx = 0; diag_idx < matrix_height; ++diag_idx) {
+            nonzero_mask->push_back(isDiagonalNonZero(diag_idx));
+        }
+    }
+
     switch (BSGSmode) {
         case true: {
             if (babyStep == 0) {
                 babyStep = ceil(sqrt(matrix_height));
-            } 
-            for (uint32_t diag_idx = 0; diag_idx < babyStep; ++diag_idx) {
-                // std::cout << diag_idx << std::endl;
-                rotations.push_back(diag_idx);
             }
-            for (uint32_t diag_idx = babyStep; diag_idx < matrix_height; diag_idx+=babyStep) {
-                // std::cout << diag_idx << std::endl;
-                rotations.push_back(diag_idx);
+
+            uint32_t giantSteps = (matrix_height + babyStep - 1) / babyStep;  // ceil division
+
+            // Baby steps: add rotation j if ANY diagonal at (i*babyStep + j) is non-zero
+            for (uint32_t j = 0; j < babyStep; ++j) {
+                bool has_nonzero = false;
+                for (uint32_t i = 0; i < giantSteps; ++i) {
+                    uint32_t idx = i * babyStep + j;
+                    if (idx < matrix_height && nonzero_mask != nullptr && (*nonzero_mask)[idx]) {
+                        has_nonzero = true;
+                        break;
+                    }
+                }
+                if (has_nonzero) {
+                    rotations.push_back(j);
+                }
+            }
+
+            // Giant steps: add rotation i*babyStep if ANY diagonal at (i*babyStep + j) is non-zero
+            for (uint32_t i = 0; i < giantSteps; ++i) {
+                bool has_nonzero = false;
+                for (uint32_t j = 0; j < babyStep; ++j) {
+                    uint32_t idx = i * babyStep + j;
+                    if (idx < matrix_height && nonzero_mask != nullptr && (*nonzero_mask)[idx]) {
+                        has_nonzero = true;
+                        break;
+                    }
+                }
+                if (has_nonzero) {
+                    rotations.push_back(i * babyStep);
+                }
             }
             break;
         }
         case false: {
             for (uint32_t diag_idx = 0; diag_idx < matrix_height; ++diag_idx) {
-                bool is_nonzero = false;
-                for (uint32_t n = 0; n < matrix_width; ++n) {
-                    if (std::abs(matrix[diag_idx][n]) > 1e-10) {
-                        is_nonzero = true;
-                        break;
-                    }
-                }
                 // Only store non-zero diagonals
-                if (is_nonzero) {
+                if (nonzero_mask != nullptr && (*nonzero_mask)[diag_idx]) {
                     rotations.push_back(diag_idx);
                 }
             }
@@ -535,7 +572,8 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                                         const std::vector<T>& diagonals,
                                         uint32_t hoistingMode,
                                         std::vector<int32_t>& rotations,
-                                        uint32_t babyStep) { 
+                                        uint32_t babyStep,
+                                        const std::vector<bool>* nonzero_mask) { 
 
     if (rotations.empty()) {
         rotations.reserve(diagonals.size());
@@ -596,13 +634,20 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                 fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);
             }
 
+            bool first_result = true;  // Track if this is the first non-zero giant step result
             for (uint32_t i = 0; i < giantStep; i++) {
                 Ciphertext<DCRTPoly> inner;
+                bool first_nonzero = true;
 
                 for (uint32_t j = 0; j < babyStep; j++) {
                     uint32_t idx = i * babyStep + j;
                     if (idx >= diagonals.size()) break;  // Handle incomplete last giant step
-                    
+
+                    // Skip if diagonal is zero (when mask is provided)
+                    if (nonzero_mask != nullptr && idx < nonzero_mask->size()) {
+                        if (!(*nonzero_mask)[idx]) continue;
+                    }
+
                     // remove for after pre rotation diagonals by -babyStep * i
                     int32_t jdx = static_cast<int32_t>(babyStep * i * -1);
                     Ciphertext<DCRTPoly> ctProduct;
@@ -615,22 +660,27 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                         auto preRotated = cryptoContext->MakeCKKSPackedPlaintext(rotatedVec);
                         ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
                     }
-                    
-                    if (j == 0) {
+
+                    if (first_nonzero) {
                         inner = ctProduct;
+                        first_nonzero = false;
                     } else {
                         cryptoContext->EvalAddInPlace(inner, ctProduct);
                     }
                 }
 
                 // Step 2.5: Apply giant-step rotation with SECOND HOISTING
-                auto innerDigits = cryptoContext->EvalFastRotationPrecompute(inner);
-                if (i == 0) {
-                    ctResult = cryptoContext->EvalFastRotation(inner, 0, M, innerDigits);
-                } else {
-                    // std::cout << i * babyStep << std::endl;
+                // Only process if we had at least one non-zero diagonal in this giant step
+                if (!first_nonzero) {
+                    auto innerDigits = cryptoContext->EvalFastRotationPrecompute(inner);
                     auto rotated = cryptoContext->EvalFastRotation(inner, i * babyStep, M, innerDigits);
-                    cryptoContext->EvalAddInPlace(ctResult, rotated);
+
+                    if (first_result) {
+                        ctResult = rotated;
+                        first_result = false;
+                    } else {
+                        cryptoContext->EvalAddInPlace(ctResult, rotated);
+                    }
                 }
             }
             break;
@@ -640,21 +690,23 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
     }
     return ctResult;
 }
-template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Ciphertext<DCRTPoly>>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep);
-template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Plaintext>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep);
+template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Ciphertext<DCRTPoly>>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep, const std::vector<bool>* nonzero_mask);
+template Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector, const std::vector<Plaintext>& diagonals, uint32_t hoistingMode, std::vector<int32_t>& rotations, uint32_t babyStep, const std::vector<bool>* nonzero_mask);
 
-std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors) {
-    std::vector<Plaintext> ctVectors;
+std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors, std::vector<bool>* nonzero_mask) {
+    std::vector<Plaintext> ptVectors(vectors.size());
+    #pragma omp parallel for
     for (uint32_t i = 0; i < vectors.size(); i++) {
-        ctVectors.push_back(cc->MakeCKKSPackedPlaintext(vectors[i]));
+        if (nonzero_mask != nullptr && (*nonzero_mask)[i]) ptVectors[i] = cc->MakeCKKSPackedPlaintext(vectors[i]);
     }
-    return ctVectors;
+    return ptVectors;
 }
 
-std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& vectors) {
-    std::vector<Ciphertext<DCRTPoly>> ctVectors;
-    for (uint32_t i = 0; i < vectors.size(); i++) {
-        ctVectors.push_back(cc->Encrypt(publicKey, vectors[i]));
+std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& ptvectors, std::vector<bool>* nonzero_mask) {
+    std::vector<Ciphertext<DCRTPoly>> ctVectors(ptvectors.size());
+    #pragma omp parallel for
+    for (uint32_t i = 0; i < ptvectors.size(); i++) {
+        if (nonzero_mask != nullptr && (*nonzero_mask)[i]) ctVectors[i] = cc->Encrypt(publicKey, ptvectors[i]);
     }
     return ctVectors;
 }

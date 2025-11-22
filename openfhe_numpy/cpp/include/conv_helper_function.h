@@ -24,13 +24,20 @@ std::vector<std::vector<T>> PackMatDiagWise(
 
 /**
  * @brief Get a list of non-zero diagonals in a matrix
- * 
+ *
  * @param matrix Input diagonals (D x W)
+ * @param nonzero_mask Optional output parameter - if provided, will be populated with a boolean
+ *                     mask indicating which rotations correspond to non-zero diagonals
  * @param BSGSmode get BSGS rotation
  * @param babyStep babyStep for BSGS, Default: sqrt(D)
- * @return List of non-zero diagonal indices
+ * @return List of diagonal indices for rotation key generation
  */
-std::vector<int32_t> getOptimalRots(const std::vector<std::vector<double>> &matrix, bool BSGSmode = false, uint32_t babyStep = 0);
+std::vector<int32_t> getOptimalRots(
+    const std::vector<std::vector<double>> &matrix, 
+    std::vector<bool>* nonzero_mask = nullptr,
+    bool BSGSmode = false, 
+    uint32_t babyStep = 0
+);
 
 /**
  * @brief Structure to hold diagonalization results
@@ -116,6 +123,7 @@ std::vector<std::vector<T>> MultiplexDenseMatrix(
 * @param optimizationMode 0 = non-zero, 1 = hoisting, 2 = BSGS + hoisting, default: 1
 * @param rotations List of rotations for non-zero optimisations for optimizationMode 0 and 1
 * @param babyStep baby step split for optimizationMode 2, default: sqrt(rotations)
+* @param nonzero_mask Optional mask indicating which diagonals are non-zero (for skipping zero multiplications)
 *
 * @return The ciphertext resulting from the matrix-vector product.
 */
@@ -125,7 +133,8 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(
     const std::vector<T>& diagonals,
     uint32_t optimizationMode = 1,
     std::vector<int32_t>& rotations = {},
-    uint32_t babyStep = 0
+    uint32_t babyStep = 0,
+    const std::vector<bool>* nonzero_mask = nullptr
 );
 
 /**
@@ -133,20 +142,33 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(
 *
 * @param cc  Cryptocontext
 * @param vectors vectors of doubles
+* @param nonzero_mask Optional output parameter - if provided, will be populated with a boolean
+*                     mask indicating which rotations correspond to non-zero diagonals
 *
 * @return Vectors of encoded CKKS plaintexts.
 */
-std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(const CryptoContextCKKSRNS::ContextType &cc, const std::vector<std::vector<double>>& vectors);
+std::vector<Plaintext> MakeCKKSPackedPlaintextVectors(
+    const CryptoContextCKKSRNS::ContextType &cc, 
+    const std::vector<std::vector<double>>& vectors,
+    std::vector<bool>* nonzero_mask = nullptr
+);
 
 /**
 * @brief Encodes the vector of real numbers into a CKKS packed plaintext within a vector
 *
 * @param cc  Cryptocontext
 * @param publicKey public key for encryption
-* @param vectors vectors of plaintexts
+* @param ptvectors vectors of plaintexts
+* @param nonzero_mask Optional output parameter - if provided, will be populated with a boolean
+*                     mask indicating which rotations correspond to non-zero diagonals
 *
 * @return Vectors of encoded CKKS ciphertexts.
 */
-std::vector<Ciphertext<DCRTPoly>> EncryptVectors(const CryptoContextCKKSRNS::ContextType &cc, const PublicKey<DCRTPoly>& publicKey, const std::vector<Plaintext>& vectors);
+std::vector<Ciphertext<DCRTPoly>> EncryptVectors(
+    const CryptoContextCKKSRNS::ContextType &cc, 
+    const PublicKey<DCRTPoly>& publicKey, 
+    const std::vector<Plaintext>& ptvectors,
+    std::vector<bool>* nonzero_mask = nullptr
+);
 
 #endif  // __CONV_HELPER_FUNCTION_H__

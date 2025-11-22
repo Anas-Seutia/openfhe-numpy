@@ -100,3 +100,6 @@ data/MNIST/*
 # Models
 export*.py
 openfhe_numpy/cpp/models/*
+
+# Claude memory
+CLAUDE.md

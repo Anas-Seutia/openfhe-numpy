@@ -23,10 +23,6 @@
 using namespace openfhe_numpy;
 using namespace lbcrypto;
 
-// ========== DEBUG MODE ==========
-// Set to true to decrypt and print intermediate values after each layer
-constexpr bool DEBUG_MODE = true;
-
 // ========== ACTIVATION FUNCTION TYPE ==========
 enum class ActivationType {
     SCHEME_SWITCH,  // CKKS-FHEW-CKKS scheme switching
@@ -62,105 +58,66 @@ void PrintBounds(const std::vector<double>& vec, const std::string& name) {
               << minVal << ", " << maxVal << "]" << std::endl;
 }
 
-/**
- * @brief Decrypt and print first N values for debugging
- */
-void PrintDebugValues(
-    CryptoContext<DCRTPoly>& cc,
-    const Ciphertext<DCRTPoly>& ct,
-    const PrivateKey<DCRTPoly>& secretKey,
-    const std::string& name,
-    size_t numValues = 10,
-    size_t totalElements = 0
-) {
-    if (!DEBUG_MODE) return;
-
-    Plaintext ptxt;
-    cc->Decrypt(secretKey, ct, &ptxt);
-    if (totalElements > 0) {
-        ptxt->SetLength(totalElements);
-    }
-    std::vector<double> values = ptxt->GetRealPackedValue();
-
-    std::cout << "  [DEBUG] " << name << " (first " << std::min(numValues, values.size()) << " values):" << std::endl;
-    std::cout << "    ";
-    for (size_t i = 0; i < std::min(numValues, values.size()); i++) {
-        std::cout << std::fixed << std::setprecision(4) << values[i];
-        if (i < std::min(numValues, values.size()) - 1) std::cout << ", ";
-    }
-    std::cout << std::endl;
-
-    // Also print bounds
-    if (totalElements > 0 && values.size() > totalElements) {
-        values.resize(totalElements);
-    }
-    PrintBounds(values, name);
-}
-
-/**
- * @brief Print first N values of conv kernel for debugging
- */
-void PrintKernelDebug(const std::vector<std::vector<std::vector<std::vector<double>>>>& kernel, const std::string& name, size_t numValues = 10) {
-    if (!DEBUG_MODE) return;
-
-    std::cout << "  [DEBUG WEIGHTS] " << name << " first channel [0][0] (first " << numValues << " values, flattened):" << std::endl;
-    std::cout << "    ";
-    size_t count = 0;
-    for (size_t i = 0; i < kernel[0][0].size() && count < numValues; i++) {
-        for (size_t j = 0; j < kernel[0][0][i].size() && count < numValues; j++) {
-            std::cout << std::fixed << std::setprecision(4) << kernel[0][0][i][j];
-            if (count < numValues - 1) std::cout << ", ";
-            count++;
-        }
-    }
-    std::cout << std::endl;
-}
-
-/**
- * @brief Print first N values of dense weights for debugging
- */
-void PrintWeightsDebug(const std::vector<std::vector<double>>& weights, const std::string& name, size_t numValues = 10) {
-    if (!DEBUG_MODE) return;
-
-    std::cout << "  [DEBUG WEIGHTS] " << name << " first row [0] (first " << std::min(numValues, weights[0].size()) << " values):" << std::endl;
-    std::cout << "    ";
-    for (size_t i = 0; i < std::min(numValues, weights[0].size()); i++) {
-        std::cout << std::fixed << std::setprecision(4) << weights[0][i];
-        if (i < std::min(numValues, weights[0].size()) - 1) std::cout << ", ";
-    }
-    std::cout << std::endl;
-}
 
 /**
  * @brief Helper function to prepare bias vector for addition to ciphertext
  * @param bias Bias vector (one value per output channel/neuron)
- * @param outputSize Total size of output (channels * height * width for conv, or neurons for dense)
+ * @param outputSize Total size of output (for dense layers, or multiplexed size for conv)
  * @param channels Number of channels (for conv layers)
  * @param spatialSize Height * width (for conv layers, set to 1 for dense)
+ * @param outputGap Multiplexing gap (default 1 = no multiplexing)
+ * @param outputHeight Output height before multiplexing (for conv with multiplexing)
+ * @param outputWidth Output width before multiplexing (for conv with multiplexing)
  */
 std::vector<double> PrepareBiasVector(
     const std::vector<double>& bias,
     uint32_t outputSize,
     uint32_t channels = 1,
-    uint32_t spatialSize = 1
+    uint32_t spatialSize = 1,
+    uint32_t outputGap = 1,
+    uint32_t outputHeight = 0,
+    uint32_t outputWidth = 0
 ) {
-    std::vector<double> biasVec(outputSize, 0.0);
-
     if (spatialSize == 1) {
         // Dense layer: bias[i] goes to position i
+        std::vector<double> biasVec(outputSize, 0.0);
         for (size_t i = 0; i < bias.size() && i < outputSize; i++) {
             biasVec[i] = bias[i];
         }
+        return biasVec;
+    } else if (outputGap > 1) {
+        // Conv layer with multiplexing
+        uint32_t outputGapSquared = outputGap * outputGap;
+        uint32_t multiplexedHeight = outputHeight * outputGap;
+        uint32_t multiplexedWidth = outputWidth * outputGap;
+
+        std::vector<double> biasVec(outputSize, 0.0);
+        for (uint32_t co = 0; co < channels; ++co) {
+            for (uint32_t h = 0; h < outputHeight; ++h) {
+                for (uint32_t w = 0; w < outputWidth; ++w) {
+                    uint32_t superCh = co / outputGapSquared;
+                    uint32_t inBlock = co % outputGapSquared;
+                    uint32_t blockH = inBlock / outputGap;
+                    uint32_t blockW = inBlock % outputGap;
+                    uint32_t finalH = h * outputGap + blockH;
+                    uint32_t finalW = w * outputGap + blockW;
+                    uint32_t idx = superCh * multiplexedHeight * multiplexedWidth +
+                                   finalH * multiplexedWidth + finalW;
+                    biasVec[idx] = bias[co];
+                }
+            }
+        }
+        return biasVec;
     } else {
-        // Conv layer: bias[c] is replicated across all spatial positions of channel c
+        // Conv layer without multiplexing: bias[c] is replicated across all spatial positions of channel c
+        std::vector<double> biasVec(outputSize, 0.0);
         for (uint32_t c = 0; c < channels; c++) {
             for (uint32_t s = 0; s < spatialSize; s++) {
                 biasVec[c * spatialSize + s] = bias[c];
             }
         }
+        return biasVec;
     }
-
-    return biasVec;
 }
 
 /**
@@ -219,7 +176,7 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     // Step 2: Multiply input by comparison result to get ReLU
     // The comparison returns 1 if x > 0, 0 otherwise
     // We need to invert: (1 - comparison) to get mask
-    auto ctReLU = cc->EvalMult(ct, cc->EvalAdd(cc->EvalMult(ctComparison, -1), 1));
+    auto ctReLU = cc->EvalMult(ct, cc->EvalSub(1, ctComparison));
 
     return ctReLU;
 }
@@ -261,7 +218,7 @@ Ciphertext<DCRTPoly> EvalActivation(
     }
 }
 
-// ========== CLEARTEXT VALIDATION FUNCTIONS (REMOVE LATER) ==========
+// ========== CLEARTEXT VALIDATION FUNCTIONS (END) ==========
 
 /**
  * @brief Cleartext 2D convolution for validation
@@ -423,49 +380,43 @@ std::vector<double> CleartextActivation(const std::vector<double>& input, Activa
 }
 
 /**
- * @brief Compare two vectors and report detailed statistics
+ * @brief Compare cleartext and encrypted results
  */
-void CompareVectors(const std::vector<double>& cleartext, const std::vector<double>& encrypted,
-                    const std::string& layerName, double threshold = 1e-2) {
-    size_t len = std::min(cleartext.size(), encrypted.size());
+void CompareVectors(
+    const std::vector<double>& cleartext,
+    const std::vector<double>& encrypted,
+    const std::string& layerName,
+    double threshold = 1e-2
+) {
+    if (cleartext.size() != encrypted.size()) {
+        std::cout << "  [VALIDATION ERROR] " << layerName << ": Size mismatch! "
+                  << "Cleartext: " << cleartext.size() << ", Encrypted: " << encrypted.size() << std::endl;
+        return;
+    }
+
+    PrintBounds(cleartext, "cleartext");
+    PrintBounds(encrypted, "encrypted");
+
     double maxError = 0.0;
     double sumError = 0.0;
-    size_t errorCount = 0;
 
-    for (size_t i = 0; i < len; i++) {
+    for (size_t i = 0; i < cleartext.size(); ++i) {
         double error = std::abs(cleartext[i] - encrypted[i]);
         sumError += error;
-        if (error > maxError) maxError = error;
-        if (error > threshold) errorCount++;
-    }
-
-    double avgError = sumError / len;
-    std::cout << "  [VALIDATION] " << layerName << ":" << std::endl;
-    std::cout << "    Max error: " << std::fixed << std::setprecision(6) << maxError << std::endl;
-    std::cout << "    Avg error: " << avgError << std::endl;
-    std::cout << "    Elements with error > " << threshold << ": " << errorCount << " / " << len;
-
-    if (errorCount == 0) {
-        std::cout << " ✓ PASS" << std::endl;
-    } else {
-        std::cout << " ✗ FAIL" << std::endl;
-        // Print first few mismatches
-        std::cout << "    First mismatches:" << std::endl;
-        int printed = 0;
-        for (size_t i = 0; i < len && printed < 5; i++) {
-            double error = std::abs(cleartext[i] - encrypted[i]);
-            if (error > threshold) {
-                std::cout << "      [" << i << "] cleartext: " << cleartext[i]
-                         << ", encrypted: " << encrypted[i] << ", error: " << error << std::endl;
-                printed++;
-            }
+        if (error > maxError) {
+            maxError = error;
         }
     }
+
+    double avgError = sumError / cleartext.size();
+
+    std::cout << "    Max error: " << std::scientific << std::setprecision(6) << maxError << std::endl;
+    std::cout << "    Avg error: " << std::scientific << std::setprecision(6) << avgError << std::endl;
 }
 
-// ========== END CLEARTEXT VALIDATION FUNCTIONS ==========
+// ========== CLEARTEXT VALIDATION FUNCTIONS (END) ==========
 
-void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH) {
+void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, bool enableValidation = false) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -552,7 +503,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = TOY;
     uint32_t logQ_ccLWE = 25;
-    uint32_t slots = 4096;
+    uint32_t slots = 8192;
     uint32_t batchSize = slots;
 
     // Bootstrapping parameters
@@ -719,58 +670,86 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t dense3Output = 10;
     std::cout << "  Dense3: " << dense3Input << " -> " << dense3Output << std::endl;
 
+    // Multiplexing parameters
+    // Rule: input_gap = last layer's output_gap, output_gap = input_gap * stride
+    uint32_t conv1_input_gap = 1;    // Initial input, no multiplexing
+    uint32_t conv1_output_gap = conv1_input_gap * 1;  // stride=1 -> output_gap=1
+
+    uint32_t pool1_input_gap = conv1_output_gap;  // = 1
+    uint32_t pool1_output_gap = pool1_input_gap * 2;  // stride=2 -> output_gap=2
+
+    uint32_t conv2_input_gap = pool1_output_gap;  // = 2
+    uint32_t conv2_output_gap = conv2_input_gap * 1;  // stride=1 -> output_gap=2
+
+    uint32_t pool2_input_gap = conv2_output_gap;  // = 2
+    uint32_t pool2_output_gap = pool2_input_gap * 2;  // stride=2 -> output_gap=4
+
+    std::cout << "\nMultiplexing gaps:" << std::endl;
+    std::cout << "  Conv1: input_gap=" << conv1_input_gap << ", output_gap=" << conv1_output_gap << std::endl;
+    std::cout << "  Pool1: input_gap=" << pool1_input_gap << ", output_gap=" << pool1_output_gap << std::endl;
+    std::cout << "  Conv2: input_gap=" << conv2_input_gap << ", output_gap=" << conv2_output_gap << std::endl;
+    std::cout << "  Pool2: input_gap=" << pool2_input_gap << ", output_gap=" << pool2_output_gap << std::endl;
+
     // ========== Build Toeplitz matrices and pack into diagonals ==========
     std::cout << "\nPreparing network weights..." << std::endl;
     TIC(t);
 
     // Conv1 Toeplitz
-    auto toeplitzConv1 = ConstructConv2DToeplitz(conv1Kernel, 28, 28, 1, 0, 1, 1, 1);
+    auto toeplitzConv1 = ConstructConv2DToeplitz(conv1Kernel, 28, 28, 1, 0, 1, conv1_input_gap, conv1_output_gap);
     std::vector<std::vector<double>> conv1Diagonals = PackMatDiagWise(toeplitzConv1, batchSize);
     std::size_t conv1Cols = conv1Diagonals.size();
-    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, true);
+    std::vector<bool> conv1NonZeros(conv1Cols);
+    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, &conv1NonZeros, true);
     std::cout << "  Conv1 Toeplitz: " << conv1Cols << " rows, "
               << conv1Rotations.size() << " non-zero diagonals" << std::endl;
 
     // AvgPool1 Toeplitz
-    auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, 24, 24, 2, 0, 1, 1, 1);
+    auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, 24, 24, 2, 0, 1, pool1_input_gap, pool1_output_gap);
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
     std::size_t pool1Cols = pool1Diagonals.size();
-    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, true);
+    std::vector<bool> pool1NonZeros(pool1Cols);
+    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, true);
     std::cout << "  AvgPool1 Toeplitz: " << pool1Cols << " rows, "
               << pool1Rotations.size() << " rotation keys needed" << std::endl;
 
     // Conv2 Toeplitz
-    auto toeplitzConv2 = ConstructConv2DToeplitz(conv2Kernel, 12, 12, 1, 0, 1, 1, 1);
+    auto toeplitzConv2 = ConstructConv2DToeplitz(conv2Kernel, 12, 12, 1, 0, 1, conv2_input_gap, conv2_output_gap);
     std::vector<std::vector<double>> conv2Diagonals = PackMatDiagWise(toeplitzConv2, batchSize);
     std::size_t conv2Cols = conv2Diagonals.size();
-    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, true);
+    std::vector<bool> conv2NonZeros(conv2Cols);
+    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, &conv2NonZeros, true);
     std::cout << "  Conv2 Toeplitz: " << conv2Cols << " rows, "
               << conv2Rotations.size() << " rotation keys needed" << std::endl;
 
     // AvgPool2 Toeplitz
-    auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, 8, 8, 2, 0, 1, 1, 1);
+    auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, 8, 8, 2, 0, 1, pool2_input_gap, pool2_output_gap);
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
     std::size_t pool2Cols = pool2Diagonals.size();
-    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, true);
+    std::vector<bool> pool2NonZeros(pool2Cols);
+    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, true);
     std::cout << "  AvgPool2 Toeplitz: " << pool2Cols << " rows, "
               << pool2Rotations.size() << " rotation keys needed" << std::endl;
 
-    // Dense layers
-    std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1Weights, batchSize);
+    // Dense layer 1 - unmultiplex the pool2 output
+    auto dense1 = MultiplexDenseMatrix(dense1Weights, pool2OutputHeight, pool2OutputWidth, pool2_output_gap);
+    std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1, batchSize);
     std::size_t dense1Cols = dense1Diagonals.size();
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, true);
+    std::vector<bool> dense1NonZeros(dense1Cols);
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, true);
     std::cout << "  Dense1: " << dense1Cols << " rows, "
               << dense1Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::size_t dense2Cols = dense2Diagonals.size();
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, true);
+    std::vector<bool> dense2NonZeros(dense2Cols);
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, true);
     std::cout << "  Dense2: " << dense2Cols << " rows, "
               << dense2Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense3Diagonals = PackMatDiagWise(dense3Weights, batchSize);
     std::size_t dense3Cols = dense3Diagonals.size();
-    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, true);
+    std::vector<bool> dense3NonZeros(dense3Cols);
+    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, &dense3NonZeros, true);
     std::cout << "  Dense3: " << dense3Cols << " rows, "
               << dense3Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -804,79 +783,126 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "Input encryption time: " << TOC(t) << " ms" << std::endl;
     std::cout << "Initial ciphertext level: " << ctInput->GetLevel() << std::endl;
 
-    // ========== CLEARTEXT FORWARD PASS FOR VALIDATION (REMOVE LATER) ==========
-    std::cout << "\nRunning cleartext forward pass for validation..." << std::endl;
+    // Calculate multiplexed sizes for layers with output_gap > 1
+    // AvgPool1: output_gap = 2
+    uint32_t pool1_output_gap_squared = pool1_output_gap * pool1_output_gap;
+    uint32_t pool1_super_channels = (pool1OutputChannels + pool1_output_gap_squared - 1) / pool1_output_gap_squared;
+    uint32_t pool1_multiplexed_height = pool1OutputHeight * pool1_output_gap;
+    uint32_t pool1_multiplexed_width = pool1OutputWidth * pool1_output_gap;
+    uint32_t pool1_multiplexed_size = pool1_super_channels * pool1_multiplexed_height * pool1_multiplexed_width;
 
-    // Prepare 3D input for cleartext (1 channel, 28x28)
-    std::vector<std::vector<std::vector<double>>> mnistInput3D(1,
-        std::vector<std::vector<double>>(28, std::vector<double>(28)));
-    for (int h = 0; h < 28; h++) {
-        for (int w = 0; w < 28; w++) {
-            mnistInput3D[0][h][w] = mnistInput[h][w];
-        }
-    }
+    // Conv2: output_gap = 2
+    uint32_t conv2_output_gap_squared = conv2_output_gap * conv2_output_gap;
+    uint32_t conv2_super_channels = (conv2OutputChannels + conv2_output_gap_squared - 1) / conv2_output_gap_squared;
+    uint32_t conv2_multiplexed_height = conv2OutputHeight * conv2_output_gap;
+    uint32_t conv2_multiplexed_width = conv2OutputWidth * conv2_output_gap;
+    uint32_t conv2_multiplexed_size = conv2_super_channels * conv2_multiplexed_height * conv2_multiplexed_width;
 
-    // Cleartext Conv1
-    auto clearConv1_3D = CleartextConv2D(mnistInput3D, conv1Kernel, 1, 0, &trainedWeights.conv1_bias);
-    auto clearConv1 = CleartextFlatten(clearConv1_3D);
+    // AvgPool2: output_gap = 4
+    uint32_t pool2_output_gap_squared = pool2_output_gap * pool2_output_gap;
+    uint32_t pool2_super_channels = (pool2OutputChannels + pool2_output_gap_squared - 1) / pool2_output_gap_squared;
+    uint32_t pool2_multiplexed_height = pool2OutputHeight * pool2_output_gap;
+    uint32_t pool2_multiplexed_width = pool2OutputWidth * pool2_output_gap;
+    uint32_t pool2_multiplexed_size = pool2_super_channels * pool2_multiplexed_height * pool2_multiplexed_width;
 
-    // Cleartext Activation1
-    auto clearReLU1 = CleartextActivation(clearConv1, activationType, trainedWeights.scale1);
+    std::cout << "\nMultiplexed output sizes:" << std::endl;
+    std::cout << "  AvgPool1: " << pool1_super_channels << "x" << pool1_multiplexed_height << "x" << pool1_multiplexed_width
+              << " = " << pool1_multiplexed_size << " (logical: 12x12x6 = " << pool1FlatSize << ")" << std::endl;
+    std::cout << "  Conv2: " << conv2_super_channels << "x" << conv2_multiplexed_height << "x" << conv2_multiplexed_width
+              << " = " << conv2_multiplexed_size << " (logical: 8x8x16 = " << conv2FlatSize << ")" << std::endl;
+    std::cout << "  AvgPool2: " << pool2_super_channels << "x" << pool2_multiplexed_height << "x" << pool2_multiplexed_width
+              << " = " << pool2_multiplexed_size << " (logical: 4x4x16 = " << pool2FlatSize << ")" << std::endl;
 
-    // Reshape for pooling
-    std::vector<std::vector<std::vector<double>>> clearReLU1_3D(6,
-        std::vector<std::vector<double>>(24, std::vector<double>(24)));
-    for (int c = 0; c < 6; c++) {
-        for (int h = 0; h < 24; h++) {
-            for (int w = 0; w < 24; w++) {
-                clearReLU1_3D[c][h][w] = clearReLU1[c * 24 * 24 + h * 24 + w];
+    // ========== CLEARTEXT FORWARD PASS FOR VALIDATION ==========
+    std::vector<double> clearConv1, clearReLU1, clearPool1, clearConv2, clearReLU2, clearPool2;
+    std::vector<double> clearDense1, clearReLU3, clearDense2, clearReLU4, clearDense3;
+
+    if (enableValidation) {
+        std::cout << "\n" << std::string(80, '-') << std::endl;
+        std::cout << "Computing cleartext reference values..." << std::endl;
+        std::cout << std::string(80, '-') << std::endl;
+
+        // Prepare 3D input for cleartext (1 channel, 28x28)
+        std::vector<std::vector<std::vector<double>>> mnistInput3D(1,
+            std::vector<std::vector<double>>(28, std::vector<double>(28)));
+        for (int h = 0; h < 28; h++) {
+            for (int w = 0; w < 28; w++) {
+                mnistInput3D[0][h][w] = mnistInput[h][w];
             }
         }
-    }
 
-    // Cleartext Pool1
-    auto clearPool1_3D = CleartextAvgPool2D(clearReLU1_3D, 2, 2);
-    auto clearPool1 = CleartextFlatten(clearPool1_3D);
+        // Cleartext Conv1
+        auto clearConv1_3D = CleartextConv2D(mnistInput3D, conv1Kernel, 1, 0, &trainedWeights.conv1_bias);
+        clearConv1 = CleartextFlatten(clearConv1_3D);
+        std::cout << "  Cleartext Conv1 output size: " << clearConv1.size() << std::endl;
 
-    // Cleartext Conv2
-    auto clearConv2_3D = CleartextConv2D(clearPool1_3D, conv2Kernel, 1, 0, &trainedWeights.conv2_bias);
-    auto clearConv2 = CleartextFlatten(clearConv2_3D);
+        // Cleartext Activation1
+        clearReLU1 = CleartextActivation(clearConv1, activationType, trainedWeights.scale1);
+        std::cout << "  Cleartext Activation1 output size: " << clearReLU1.size() << std::endl;
 
-    // Cleartext Activation2
-    auto clearReLU2 = CleartextActivation(clearConv2, activationType, trainedWeights.scale2);
-
-    // Reshape for pooling
-    std::vector<std::vector<std::vector<double>>> clearReLU2_3D(16,
-        std::vector<std::vector<double>>(8, std::vector<double>(8)));
-    for (int c = 0; c < 16; c++) {
-        for (int h = 0; h < 8; h++) {
-            for (int w = 0; w < 8; w++) {
-                clearReLU2_3D[c][h][w] = clearReLU2[c * 8 * 8 + h * 8 + w];
+        // Reshape for pooling
+        std::vector<std::vector<std::vector<double>>> clearReLU1_3D(6,
+            std::vector<std::vector<double>>(24, std::vector<double>(24)));
+        for (int c = 0; c < 6; c++) {
+            for (int h = 0; h < 24; h++) {
+                for (int w = 0; w < 24; w++) {
+                    clearReLU1_3D[c][h][w] = clearReLU1[c * 24 * 24 + h * 24 + w];
+                }
             }
         }
+
+        // Cleartext Pool1
+        auto clearPool1_3D = CleartextAvgPool2D(clearReLU1_3D, 2, 2);
+        clearPool1 = CleartextFlatten(clearPool1_3D);
+        std::cout << "  Cleartext Pool1 output size: " << clearPool1.size() << std::endl;
+
+        // Cleartext Conv2
+        auto clearConv2_3D = CleartextConv2D(clearPool1_3D, conv2Kernel, 1, 0, &trainedWeights.conv2_bias);
+        clearConv2 = CleartextFlatten(clearConv2_3D);
+        std::cout << "  Cleartext Conv2 output size: " << clearConv2.size() << std::endl;
+
+        // Cleartext Activation2
+        clearReLU2 = CleartextActivation(clearConv2, activationType, trainedWeights.scale2);
+        std::cout << "  Cleartext Activation2 output size: " << clearReLU2.size() << std::endl;
+
+        // Reshape for pooling
+        std::vector<std::vector<std::vector<double>>> clearReLU2_3D(16,
+            std::vector<std::vector<double>>(8, std::vector<double>(8)));
+        for (int c = 0; c < 16; c++) {
+            for (int h = 0; h < 8; h++) {
+                for (int w = 0; w < 8; w++) {
+                    clearReLU2_3D[c][h][w] = clearReLU2[c * 8 * 8 + h * 8 + w];
+                }
+            }
+        }
+
+        // Cleartext Pool2
+        auto clearPool2_3D = CleartextAvgPool2D(clearReLU2_3D, 2, 2);
+        clearPool2 = CleartextFlatten(clearPool2_3D);
+        std::cout << "  Cleartext Pool2 output size: " << clearPool2.size() << std::endl;
+
+        // Cleartext Dense1
+        clearDense1 = CleartextDense(clearPool2, dense1Weights, &trainedWeights.fc1_bias);
+        std::cout << "  Cleartext Dense1 output size: " << clearDense1.size() << std::endl;
+
+        // Cleartext Activation3
+        clearReLU3 = CleartextActivation(clearDense1, activationType, trainedWeights.scale3);
+        std::cout << "  Cleartext Activation3 output size: " << clearReLU3.size() << std::endl;
+
+        // Cleartext Dense2
+        clearDense2 = CleartextDense(clearReLU3, dense2Weights, &trainedWeights.fc2_bias);
+        std::cout << "  Cleartext Dense2 output size: " << clearDense2.size() << std::endl;
+
+        // Cleartext Activation4
+        clearReLU4 = CleartextActivation(clearDense2, activationType, trainedWeights.scale4);
+        std::cout << "  Cleartext Activation4 output size: " << clearReLU4.size() << std::endl;
+
+        // Cleartext Dense3
+        clearDense3 = CleartextDense(clearReLU4, dense3Weights, &trainedWeights.fc3_bias);
+        std::cout << "  Cleartext Dense3 (final) output size: " << clearDense3.size() << std::endl;
+
+        std::cout << "Cleartext reference computation complete!" << std::endl;
     }
-
-    // Cleartext Pool2
-    auto clearPool2_3D = CleartextAvgPool2D(clearReLU2_3D, 2, 2);
-    auto clearPool2 = CleartextFlatten(clearPool2_3D);
-
-    // Cleartext Dense1
-    auto clearDense1 = CleartextDense(clearPool2, dense1Weights, &trainedWeights.fc1_bias);
-
-    // Cleartext Activation3
-    auto clearReLU3 = CleartextActivation(clearDense1, activationType, trainedWeights.scale3);
-
-    // Cleartext Dense2
-    auto clearDense2 = CleartextDense(clearReLU3, dense2Weights, &trainedWeights.fc2_bias);
-
-    // Cleartext Activation4
-    auto clearReLU4 = CleartextActivation(clearDense2, activationType, trainedWeights.scale4);
-
-    // Cleartext Dense3
-    auto clearDense3 = CleartextDense(clearReLU4, dense3Weights, &trainedWeights.fc3_bias);
-
-    std::cout << "Cleartext forward pass complete!" << std::endl;
-    // ========== END CLEARTEXT FORWARD PASS ==========
 
     // ========== Forward Pass ==========
     std::cout << "\n" << std::string(80, '-') << std::endl;
@@ -885,13 +911,13 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     // Layer 1: Conv1
     std::cout << "\n[Layer 1] Conv1 (28x28x1 -> 24x24x6)..." << std::endl;
-    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals);
+    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals, &conv1NonZeros);
     auto conv1BiasVec = PrepareBiasVector(trainedWeights.conv1_bias, conv1FlatSize, conv1OutputChannels, conv1OutputHeight * conv1OutputWidth);
     auto ptConv1Bias = cc->MakeCKKSPackedPlaintext(conv1BiasVec);
 
     TIC(t);
     // ctInput = cc->EvalRotate(ctInput, -conv1Cols);
-    auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, 2, conv1Rotations);
+    auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, 2, conv1Rotations, 0, &conv1NonZeros);
 
     // Add bias
     ctConv1 = cc->EvalAdd(ctConv1, ptConv1Bias);
@@ -903,18 +929,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     ptConv1Diags.clear();
     ptConv1Diags.shrink_to_fit();
 
-    // Validate Conv1
-    Plaintext ptConv1Result;
-    cc->Decrypt(keys.secretKey, ctConv1, &ptConv1Result);
-    ptConv1Result->SetLength(conv1FlatSize);
-    std::vector<double> encConv1 = ptConv1Result->GetRealPackedValue();
-
-    // Print bounds BEFORE activation (input to ReLU)
-    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
-    PrintBounds(clearConv1, "    Conv1 output (cleartext)");
-    PrintBounds(encConv1, "    Conv1 output (encrypted)");
-
-    CompareVectors(clearConv1, encConv1, "Conv1", 1e-1);
+    // Validation: Compare encrypted vs cleartext Conv1 output
+    if (enableValidation) {
+        Plaintext ptConv1Result;
+        cc->Decrypt(keys.secretKey, ctConv1, &ptConv1Result);
+        ptConv1Result->SetLength(conv1FlatSize);
+        std::vector<double> encConv1 = ptConv1Result->GetRealPackedValue();
+        CompareVectors(clearConv1, encConv1, "Conv1", 1e-1);
+    }
 
     // Layer 2: Activation1
     std::cout << "\n[Layer 2] Activation1 (" << activationName << ")..." << std::endl;
@@ -924,64 +946,75 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << relu1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU1->GetLevel() << std::endl;
 
-    // Validate ReLU1
-    Plaintext ptReLU1Result;
-    cc->Decrypt(keys.secretKey, ctReLU1, &ptReLU1Result);
-    ptReLU1Result->SetLength(conv1FlatSize);
-    std::vector<double> encReLU1 = ptReLU1Result->GetRealPackedValue();
+    // Validation: Compare encrypted vs cleartext Activation1 output
+    if (enableValidation) {
+        Plaintext ptReLU1Result;
+        cc->Decrypt(keys.secretKey, ctReLU1, &ptReLU1Result);
+        ptReLU1Result->SetLength(conv1FlatSize);
+        std::vector<double> encReLU1 = ptReLU1Result->GetRealPackedValue();
+        CompareVectors(clearReLU1, encReLU1, "Activation1", 1e-1);
+    }
 
-    // Print bounds for Chebyshev tuning
-    PrintBounds(clearReLU1, "Activation1 (cleartext)");
-    PrintBounds(encReLU1, "Activation1 (encrypted)");
-
-    CompareVectors(clearReLU1, encReLU1, "ReLU1", 1e-1);
-
-    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals);
+    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals, &pool1NonZeros);
 
     // Layer 3: AvgPool1
-    std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6)..." << std::endl;
+    std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6";
+    if (pool1_output_gap > 1) {
+        std::cout << " multiplexed to " << pool1_super_channels << "x" << pool1_multiplexed_height << "x" << pool1_multiplexed_width;
+    }
+    std::cout << ")..." << std::endl;
     TIC(t);
     // cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -pool1Cols));
-    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, ptPool1Diags, 2, pool1Rotations);
+    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, ptPool1Diags, 2, pool1Rotations, 0, &pool1NonZeros);
     double pool1Time = TOC(t);
     std::cout << "  Time: " << pool1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool1->GetLevel() << std::endl;
 
-    // Validate Pool1
-    Plaintext ptPool1Result;
-    cc->Decrypt(keys.secretKey, ctPool1, &ptPool1Result);
-    ptPool1Result->SetLength(pool1FlatSize);
-    std::vector<double> encPool1 = ptPool1Result->GetRealPackedValue();
-    CompareVectors(clearPool1, encPool1, "AvgPool1", 1e-1);
+    // Validation: Compare encrypted vs cleartext Pool1 output
+    if (enableValidation) {
+        Plaintext ptPool1Result;
+        cc->Decrypt(keys.secretKey, ctPool1, &ptPool1Result);
+        ptPool1Result->SetLength(pool1_multiplexed_size);
+        std::vector<double> encPool1 = ptPool1Result->GetRealPackedValue();
+        // Only compare the first pool1FlatSize elements (logical output)
+        encPool1.resize(pool1FlatSize);
+        CompareVectors(clearPool1, encPool1, "AvgPool1", 1e-1);
+    }
 
     ptPool1Diags.clear();
     ptPool1Diags.shrink_to_fit();
 
-    // Bootstrap after Pool1 if needed (only when levels are low)
+    // Bootstrap if needed (when levels are low)
     double bootstrap1Time = 0.0;
     uint32_t levelsRemaining1 = multDepth - ctPool1->GetLevel();
-    std::cout << "\n[Bootstrap Check] After AvgPool1: " << levelsRemaining1 << " levels remaining" << std::endl;
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after AvgPool1" << std::endl;
     if (levelsRemaining1 < 5) {
-        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
         TIC(t);
         ctPool1 = cc->EvalBootstrap(ctPool1);
         bootstrap1Time = TOC(t);
-        std::cout << "  Bootstrapping time: " << bootstrap1Time << " ms" << std::endl;
+        std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctPool1->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
-    auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2FlatSize, conv2OutputChannels, conv2OutputHeight * conv2OutputWidth);
+    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals, &conv2NonZeros);
+    auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2_multiplexed_size, conv2OutputChannels,
+                                          conv2OutputHeight * conv2OutputWidth, conv2_output_gap,
+                                          conv2OutputHeight, conv2OutputWidth);
     auto ptConv2Bias = cc->MakeCKKSPackedPlaintext(conv2BiasVec);
 
     // Layer 4: Conv2
-    std::cout << "\n[Layer 4] Conv2 (12x12x6 -> 8x8x16)..." << std::endl;
+    std::cout << "\n[Layer 4] Conv2 (12x12x6 -> 8x8x16";
+    if (conv2_output_gap > 1) {
+        std::cout << " multiplexed to " << conv2_super_channels << "x" << conv2_multiplexed_height << "x" << conv2_multiplexed_width;
+    }
+    std::cout << ")..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(cc->EvalRotate(ctPool1, -conv2Cols), -conv2Cols));
-    auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, 2, conv2Rotations);
+    auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, 2, conv2Rotations, 0, &conv2NonZeros);
 
     // Add bias
     ctConv2 = cc->EvalAdd(ctConv2, ptConv2Bias);
@@ -990,18 +1023,16 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << conv2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv2->GetLevel() << std::endl;
 
-    // Validate Conv2
-    Plaintext ptConv2Result;
-    cc->Decrypt(keys.secretKey, ctConv2, &ptConv2Result);
-    ptConv2Result->SetLength(conv2FlatSize);
-    std::vector<double> encConv2 = ptConv2Result->GetRealPackedValue();
-
-    // Print bounds BEFORE activation
-    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
-    PrintBounds(clearConv2, "    Conv2 output (cleartext)");
-    PrintBounds(encConv2, "    Conv2 output (encrypted)");
-
-    CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
+    // Validation: Compare encrypted vs cleartext Conv2 output
+    if (enableValidation) {
+        Plaintext ptConv2Result;
+        cc->Decrypt(keys.secretKey, ctConv2, &ptConv2Result);
+        ptConv2Result->SetLength(conv2_multiplexed_size);
+        std::vector<double> encConv2 = ptConv2Result->GetRealPackedValue();
+        // Only compare the first conv2FlatSize elements (logical output)
+        encConv2.resize(conv2FlatSize);
+        CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
+    }
 
     ptConv2Diags.clear();
     ptConv2Diags.shrink_to_fit();
@@ -1009,68 +1040,75 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     // Layer 5: Activation2
     std::cout << "\n[Layer 5] Activation2 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU2 = EvalActivation(cc, ctConv2, activationType, keys.publicKey, conv2FlatSize, slots, scaleSignFHEW, 5, -1657.532905, 1155.935255, trainedWeights.scale2);
+    auto ctReLU2 = EvalActivation(cc, ctConv2, activationType, keys.publicKey, conv2_multiplexed_size, slots, scaleSignFHEW, 5, -1657.532905, 1155.935255, trainedWeights.scale2);
     double relu2Time = TOC(t);
     std::cout << "  Time: " << relu2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU2->GetLevel() << std::endl;
 
-    // Validate ReLU2
-    Plaintext ptReLU2Result;
-    cc->Decrypt(keys.secretKey, ctReLU2, &ptReLU2Result);
-    ptReLU2Result->SetLength(conv2FlatSize);
-    std::vector<double> encReLU2 = ptReLU2Result->GetRealPackedValue();
+    // Validation: Compare encrypted vs cleartext Activation2 output
+    if (enableValidation) {
+        Plaintext ptReLU2Result;
+        cc->Decrypt(keys.secretKey, ctReLU2, &ptReLU2Result);
+        ptReLU2Result->SetLength(conv2_multiplexed_size);
+        std::vector<double> encReLU2 = ptReLU2Result->GetRealPackedValue();
+        // Only compare the first conv2FlatSize elements (logical output)
+        encReLU2.resize(conv2FlatSize);
+        CompareVectors(clearReLU2, encReLU2, "Activation2", 1e-1);
+    }
 
-    // Print bounds for Chebyshev tuning
-    PrintBounds(clearReLU2, "Activation2 (cleartext)");
-    PrintBounds(encReLU2, "Activation2 (encrypted)");
-
-    CompareVectors(clearReLU2, encReLU2, "ReLU2", 1e-1);
-
-    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals);
+    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals, &pool2NonZeros);
 
     // Layer 6: AvgPool2
-    std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16)..." << std::endl;
+    std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16";
+    if (pool2_output_gap > 1) {
+        std::cout << " multiplexed to " << pool2_super_channels << "x" << pool2_multiplexed_height << "x" << pool2_multiplexed_width;
+    }
+    std::cout << ")..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -pool2Cols));
-    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, ptPool2Diags, 2, pool2Rotations);
+    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, ptPool2Diags, 2, pool2Rotations, 0, &pool2NonZeros);
     double pool2Time = TOC(t);
     std::cout << "  Time: " << pool2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool2->GetLevel() << std::endl;
 
-    // Validate Pool2
-    Plaintext ptPool2Result;
-    cc->Decrypt(keys.secretKey, ctPool2, &ptPool2Result);
-    ptPool2Result->SetLength(pool2FlatSize);
-    std::vector<double> encPool2 = ptPool2Result->GetRealPackedValue();
-    CompareVectors(clearPool2, encPool2, "AvgPool2", 1e-1);
+    // Validation: Compare encrypted vs cleartext Pool2 output
+    if (enableValidation) {
+        Plaintext ptPool2Result;
+        cc->Decrypt(keys.secretKey, ctPool2, &ptPool2Result);
+        ptPool2Result->SetLength(pool2_multiplexed_size);
+        std::vector<double> encPool2 = ptPool2Result->GetRealPackedValue();
+        // Only compare the first pool2FlatSize elements (logical output)
+        encPool2.resize(pool2FlatSize);
+        CompareVectors(clearPool2, encPool2, "AvgPool2", 1e-1);
+    }
 
     ptPool2Diags.clear();
     ptPool2Diags.shrink_to_fit();
 
-    // Bootstrap after Pool2 if needed (only when levels are low)
+    // Bootstrap if needed (when levels are low)
     double bootstrap2Time = 0.0;
     uint32_t levelsRemaining2 = multDepth - ctPool2->GetLevel();
-    std::cout << "\n[Bootstrap Check] After AvgPool2: " << levelsRemaining2 << " levels remaining" << std::endl;
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after AvgPool2" << std::endl;
     if (levelsRemaining2 < 5) {
-        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
         TIC(t);
         ctPool2 = cc->EvalBootstrap(ctPool2);
         bootstrap2Time = TOC(t);
-        std::cout << "  Bootstrapping time: " << bootstrap2Time << " ms" << std::endl;
+        std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctPool2->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
+    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals, &dense1NonZeros);
     auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
     auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
 
     // Layer 7: Dense1
-    std::cout << "\n[Layer 7] Dense1 (256 -> 120)..." << std::endl;
+    std::cout << "\n[Layer 7] Dense1 (unmultiplex " << pool2_multiplexed_size << " -> " << pool2FlatSize << " -> " << dense1Output << ")..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
-    auto ctDense1 = EvalMultMatVecDiag(ctPool2, ptDense1Diags, 2, dense1Rotations);
+    auto ctDense1 = EvalMultMatVecDiag(ctPool2, ptDense1Diags, 2, dense1Rotations, 0, &dense1NonZeros);
 
     // Add bias
     ctDense1 = cc->EvalAdd(ctDense1, ptDense1Bias);
@@ -1079,18 +1117,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << dense1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense1->GetLevel() << std::endl;
 
-    // VALIDATION: Dense1
-    Plaintext ptDense1Result;
-    cc->Decrypt(keys.secretKey, ctDense1, &ptDense1Result);
-    ptDense1Result->SetLength(dense1Output);
-    std::vector<double> encDense1 = ptDense1Result->GetRealPackedValue();
-
-    // Print bounds BEFORE activation
-    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
-    PrintBounds(clearDense1, "    Dense1 output (cleartext)");
-    PrintBounds(encDense1, "    Dense1 output (encrypted)");
-
-    CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
+    // Validation: Compare encrypted vs cleartext Dense1 output
+    if (enableValidation) {
+        Plaintext ptDense1Result;
+        cc->Decrypt(keys.secretKey, ctDense1, &ptDense1Result);
+        ptDense1Result->SetLength(dense1Output);
+        std::vector<double> encDense1 = ptDense1Result->GetRealPackedValue();
+        CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
+    }
 
     ptDense1Diags.clear();
     ptDense1Diags.shrink_to_fit();
@@ -1103,34 +1137,31 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << relu3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU3->GetLevel() << std::endl;
 
-    // VALIDATION: ReLU3
-    Plaintext ptReLU3Result;
-    cc->Decrypt(keys.secretKey, ctReLU3, &ptReLU3Result);
-    ptReLU3Result->SetLength(dense1Output);
-    std::vector<double> encReLU3 = ptReLU3Result->GetRealPackedValue();
+    // Validation: Compare encrypted vs cleartext Activation3 output
+    if (enableValidation) {
+        Plaintext ptReLU3Result;
+        cc->Decrypt(keys.secretKey, ctReLU3, &ptReLU3Result);
+        ptReLU3Result->SetLength(dense1Output);
+        std::vector<double> encReLU3 = ptReLU3Result->GetRealPackedValue();
+        CompareVectors(clearReLU3, encReLU3, "Activation3", 1e-1);
+    }
 
-    // Print bounds for Chebyshev tuning
-    PrintBounds(clearReLU3, "Activation3 (cleartext)");
-    PrintBounds(encReLU3, "Activation3 (encrypted)");
-
-    CompareVectors(clearReLU3, encReLU3, "ReLU3", 1e-1);
-
-    // Bootstrap after ReLU3 if needed (only when levels are low)
+    // Bootstrap if needed (when levels are low)
     double bootstrap3Time = 0.0;
     uint32_t levelsRemaining3 = multDepth - ctReLU3->GetLevel();
-    std::cout << "\n[Bootstrap Check] After Activation3: " << levelsRemaining3 << " levels remaining" << std::endl;
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining3 << " levels remaining after Activation3" << std::endl;
     if (levelsRemaining3 < 5) {
-        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
         TIC(t);
         ctReLU3 = cc->EvalBootstrap(ctReLU3);
         bootstrap3Time = TOC(t);
-        std::cout << "  Bootstrapping time: " << bootstrap3Time << " ms" << std::endl;
+        std::cout << "  Time: " << bootstrap3Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU3->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
+    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals, &dense2NonZeros);
     auto dense2BiasVec = PrepareBiasVector(trainedWeights.fc2_bias, dense2Output);
     auto ptDense2Bias = cc->MakeCKKSPackedPlaintext(dense2BiasVec);
 
@@ -1138,7 +1169,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "\n[Layer 9] Dense2 (120 -> 84)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
-    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, ptDense2Diags, 2, dense2Rotations);
+    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, ptDense2Diags, 2, dense2Rotations, 0, &dense2NonZeros);
 
     // Add bias
     ctDense2 = cc->EvalAdd(ctDense2, ptDense2Bias);
@@ -1147,33 +1178,17 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << dense2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctDense2->GetLevel() << std::endl;
 
-    // VALIDATION: Dense2
-    Plaintext ptDense2Result;
-    cc->Decrypt(keys.secretKey, ctDense2, &ptDense2Result);
-    ptDense2Result->SetLength(dense2Output);
-    std::vector<double> encDense2 = ptDense2Result->GetRealPackedValue();
-
-    // Print bounds BEFORE activation
-    std::cout << "  [PRE-ACTIVATION BOUNDS]" << std::endl;
-    PrintBounds(clearDense2, "    Dense2 output (cleartext)");
-    PrintBounds(encDense2, "    Dense2 output (encrypted)");
-
-    CompareVectors(clearDense2, encDense2, "Dense2", 1e-1);
+    // Validation: Compare encrypted vs cleartext Dense2 output
+    if (enableValidation) {
+        Plaintext ptDense2Result;
+        cc->Decrypt(keys.secretKey, ctDense2, &ptDense2Result);
+        ptDense2Result->SetLength(dense2Output);
+        std::vector<double> encDense2 = ptDense2Result->GetRealPackedValue();
+        CompareVectors(clearDense2, encDense2, "Dense2", 1e-1);
+    }
 
     ptDense2Diags.clear();
     ptDense2Diags.shrink_to_fit();
-
-    // DEBUG: Print Dense2 values at indices that will fail in ReLU4
-    if (DEBUG_MODE) {
-        std::cout << "  [DEBUG] Dense2 values at future-problematic indices [34, 44, 68, 70, 73]:" << std::endl;
-        std::vector<size_t> problemIndices = {34, 44, 68, 70, 73};
-        for (size_t idx : problemIndices) {
-            if (idx < encDense2.size()) {
-                std::cout << "    [" << idx << "] cleartext=" << std::fixed << std::setprecision(4)
-                          << clearDense2[idx] << ", encrypted=" << encDense2[idx] << std::endl;
-            }
-        }
-    }
 
     // Layer 10: Activation4
     std::cout << "\n[Layer 10] Activation4 (" << activationName << ")..." << std::endl;
@@ -1183,34 +1198,31 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << relu4Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU4->GetLevel() << std::endl;
 
-    // VALIDATION: ReLU4
-    Plaintext ptReLU4Result;
-    cc->Decrypt(keys.secretKey, ctReLU4, &ptReLU4Result);
-    ptReLU4Result->SetLength(dense2Output);
-    std::vector<double> encReLU4 = ptReLU4Result->GetRealPackedValue();
+    // Validation: Compare encrypted vs cleartext Activation4 output
+    if (enableValidation) {
+        Plaintext ptReLU4Result;
+        cc->Decrypt(keys.secretKey, ctReLU4, &ptReLU4Result);
+        ptReLU4Result->SetLength(dense2Output);
+        std::vector<double> encReLU4 = ptReLU4Result->GetRealPackedValue();
+        CompareVectors(clearReLU4, encReLU4, "Activation4", 1e-1);
+    }
 
-    // Print bounds for Chebyshev tuning
-    PrintBounds(clearReLU4, "Activation4 (cleartext)");
-    PrintBounds(encReLU4, "Activation4 (encrypted)");
-
-    CompareVectors(clearReLU4, encReLU4, "ReLU4", 1e-1);
-
-    // Bootstrap after ReLU4 if needed (only when levels are low)
+    // Bootstrap if needed (when levels are low)
     double bootstrap4Time = 0.0;
     uint32_t levelsRemaining4 = multDepth - ctReLU4->GetLevel();
-    std::cout << "\n[Bootstrap Check] After Activation4: " << levelsRemaining4 << " levels remaining" << std::endl;
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining4 << " levels remaining after Activation4" << std::endl;
     if (levelsRemaining4 < 5) {
-        std::cout << "  Bootstrapping needed (< 5 levels remaining)..." << std::endl;
+        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
         TIC(t);
         ctReLU4 = cc->EvalBootstrap(ctReLU4);
         bootstrap4Time = TOC(t);
-        std::cout << "  Bootstrapping time: " << bootstrap4Time << " ms" << std::endl;
+        std::cout << "  Time: " << bootstrap4Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU4->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels available)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
+    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals, &dense3NonZeros);
     auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
     auto ptDense3Bias = cc->MakeCKKSPackedPlaintext(dense3BiasVec);
 
@@ -1218,7 +1230,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "\n[Layer 11] Dense3 (84 -> 10)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
-    auto ctOutput = EvalMultMatVecDiag(ctReLU4, ptDense3Diags, 2, dense3Rotations);
+    auto ctOutput = EvalMultMatVecDiag(ctReLU4, ptDense3Diags, 2, dense3Rotations, 0, &dense3NonZeros);
 
     // Add bias
     ctOutput = cc->EvalAdd(ctOutput, ptDense3Bias);
@@ -1227,12 +1239,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "  Time: " << dense3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctOutput->GetLevel() << std::endl;
 
-    // VALIDATION: Dense3 (Final Output)
-    Plaintext ptDense3Result;
-    cc->Decrypt(keys.secretKey, ctOutput, &ptDense3Result);
-    ptDense3Result->SetLength(dense3Output);
-    std::vector<double> encDense3 = ptDense3Result->GetRealPackedValue();
-    CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
+    // Validation: Compare encrypted vs cleartext Dense3 (final) output
+    if (enableValidation) {
+        Plaintext ptDense3Result;
+        cc->Decrypt(keys.secretKey, ctOutput, &ptDense3Result);
+        ptDense3Result->SetLength(dense3Output);
+        std::vector<double> encDense3 = ptDense3Result->GetRealPackedValue();
+        CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
+    }
 
     ptDense3Diags.clear();
     ptDense3Diags.shrink_to_fit();
@@ -1241,16 +1255,15 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
                                 pool2Time + bootstrap2Time + dense1Time + relu3Time + bootstrap3Time +
                                 dense2Time + relu4Time + bootstrap4Time + dense3Time;
     double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time + bootstrap4Time;
-    std::cout << "\nTotal inference time: " << totalInferenceTime << " ms" << std::endl;
+    std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";
     if (totalBootstrapTime > 0) {
-        std::cout << "  (includes " << totalBootstrapTime << " ms for bootstrapping)" << std::endl;
-    } else {
-        std::cout << "  (no bootstrapping needed - sufficient depth available)" << std::endl;
+        std::cout << " (includes " << totalBootstrapTime << " ms bootstrapping)";
     }
+    std::cout << std::endl;
 
     // ========== Decrypt and Display Results ==========
     std::cout << "\n" << std::string(80, '-') << std::endl;
-    std::cout << "Decrypting results..." << std::endl;
+    std::cout << "Results" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
 
     TIC(t);
@@ -1258,7 +1271,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     cc->Decrypt(keys.secretKey, ctOutput, &ptOutput);
     ptOutput->SetLength(dense3Output);
     std::vector<double> outputVector = ptOutput->GetRealPackedValue();
-    std::cout << "Decryption time: " << TOC(t) << " ms" << std::endl;
+    std::cout << "Output decryption time: " << TOC(t) << " ms" << std::endl;
 
     std::cout << "\nOutput logits (10 classes):" << std::endl;
     for (uint32_t i = 0; i < dense3Output; i++) {
@@ -1281,55 +1294,57 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     // ========== Performance Summary ==========
     std::cout << "\n" << std::string(80, '=') << std::endl;
-    std::cout << "Performance Summary (LeNet-5)" << std::endl;
+    std::cout << "Performance Summary" << std::endl;
     std::cout << std::string(80, '=') << std::endl;
-    std::cout << std::left << std::setw(30) << "Layer" << std::setw(15) << "Time (ms)" << "Level" << std::endl;
+    std::cout << std::left << std::setw(32) << "Layer" << std::setw(15) << "Time (ms)" << "Level" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
-    std::cout << std::left << std::setw(30) << "Conv1 (28x28x1->24x24x6)" << std::setw(15) << conv1Time << ctConv1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "AvgPool1 (24x24x6->12x12x6)" << std::setw(15) << pool1Time << (bootstrap1Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctPool1->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Conv1 (28x28x1 -> 24x24x6)" << std::setw(15) << conv1Time << ctConv1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "AvgPool1 (24x24x6 -> 12x12x6)" << std::setw(15) << pool1Time << (bootstrap1Time > 0 ? "N/A" : std::to_string(ctPool1->GetLevel())) << std::endl;
     if (bootstrap1Time > 0) {
-        std::cout << std::left << std::setw(30) << "  + Bootstrap 1" << std::setw(15) << bootstrap1Time << ctPool1->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap1" << std::setw(15) << bootstrap1Time << ctPool1->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(30) << "Conv2 (12x12x6->8x8x16)" << std::setw(15) << conv2Time << ctConv2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "AvgPool2 (8x8x16->4x4x16)" << std::setw(15) << pool2Time << (bootstrap2Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctPool2->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Conv2 (12x12x6 -> 8x8x16)" << std::setw(15) << conv2Time << ctConv2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "AvgPool2 (8x8x16 -> 4x4x16)" << std::setw(15) << pool2Time << (bootstrap2Time > 0 ? "N/A" : std::to_string(ctPool2->GetLevel())) << std::endl;
     if (bootstrap2Time > 0) {
-        std::cout << std::left << std::setw(30) << "  + Bootstrap 2" << std::setw(15) << bootstrap2Time << ctPool2->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap2" << std::setw(15) << bootstrap2Time << ctPool2->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(30) << "Dense1 (256->120)" << std::setw(15) << dense1Time << ctDense1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU3" << std::setw(15) << relu3Time << (bootstrap3Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctReLU3->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Dense1 (256 -> 120)" << std::setw(15) << dense1Time << ctDense1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation3" << std::setw(15) << relu3Time << (bootstrap3Time > 0 ? "N/A" : std::to_string(ctReLU3->GetLevel())) << std::endl;
     if (bootstrap3Time > 0) {
-        std::cout << std::left << std::setw(30) << "  + Bootstrap 3" << std::setw(15) << bootstrap3Time << ctReLU3->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap3" << std::setw(15) << bootstrap3Time << ctReLU3->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(30) << "Dense2 (120->84)" << std::setw(15) << dense2Time << ctDense2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(30) << "ReLU4" << std::setw(15) << relu4Time << (bootstrap4Time > 0 ? "N/A (bootstrapped)" : std::to_string(ctReLU4->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Dense2 (120 -> 84)" << std::setw(15) << dense2Time << ctDense2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation4" << std::setw(15) << relu4Time << (bootstrap4Time > 0 ? "N/A" : std::to_string(ctReLU4->GetLevel())) << std::endl;
     if (bootstrap4Time > 0) {
-        std::cout << std::left << std::setw(30) << "  + Bootstrap 4" << std::setw(15) << bootstrap4Time << ctReLU4->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap4" << std::setw(15) << bootstrap4Time << ctReLU4->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(30) << "Dense3 (84->10)" << std::setw(15) << dense3Time << ctOutput->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Dense3 (84 -> 10)" << std::setw(15) << dense3Time << ctOutput->GetLevel() << std::endl;
     std::cout << std::string(80, '-') << std::endl;
-    std::cout << std::left << std::setw(30) << "Total Inference" << std::setw(15) << totalInferenceTime << std::endl;
+    std::cout << std::left << std::setw(32) << "Total Inference" << std::setw(15) << totalInferenceTime << std::endl;
     if (totalBootstrapTime > 0) {
-        std::cout << std::left << std::setw(30) << "  (Bootstrapping only)" << std::setw(15) << totalBootstrapTime << std::endl;
+        std::cout << std::left << std::setw(32) << "  (Bootstrapping only)" << std::setw(15) << totalBootstrapTime << std::endl;
     }
     std::cout << std::string(80, '=') << std::endl;
 
-    std::cout << "\n✓ MNIST LeNet-5 Inference Complete (Scheme Switching)!" << std::endl;
+    std::cout << "\n✓ MNIST LeNet-5 Inference Complete (" << activationName << ")!" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     try {
-        int sampleIndex = 8;  // Default to sample 8 (label 5)
-        ActivationType activationType = ActivationType::SCHEME_SWITCH;  // Default
+        int sampleIndex = 8;
+        ActivationType activationType = ActivationType::SCHEME_SWITCH;
+        bool enableValidation = true;
 
         // Parse command line arguments
         if (argc > 1) {
             sampleIndex = std::atoi(argv[1]);
             if (sampleIndex < 0 || sampleIndex > 9999) {
                 std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
-                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type]" << std::endl;
+                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [validate]" << std::endl;
                 std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
+                std::cerr << "  validate: 1 to enable validation, 0 to disable (default)" << std::endl;
                 return 1;
             }
         }
@@ -1349,7 +1364,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        MNISTLeNet5Inference(sampleIndex, activationType);
+        if (argc > 3) {
+            enableValidation = (std::atoi(argv[3]) != 0);
+        }
+
+        MNISTLeNet5Inference(sampleIndex, activationType, enableValidation);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;

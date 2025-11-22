@@ -227,10 +227,10 @@ int main(int argc, char* argv[]) {
     // ========================================================================
 
     // Kernel shape: (out_channels, in_channels, kernel_height, kernel_width)
-    uint32_t out_channels = 1;
-    uint32_t in_channels = 5;
-    uint32_t kernel_height = 5;
-    uint32_t kernel_width = 5;
+    uint32_t out_channels = 6;
+    uint32_t in_channels = 6;
+    uint32_t kernel_height = 2;
+    uint32_t kernel_width = 2;
 
     std::cout << "Generating kernel with shape: ("
               << out_channels << ", " << in_channels << ", "
@@ -261,12 +261,12 @@ int main(int argc, char* argv[]) {
     };
 
     // Convolution parameters
-    uint32_t input_height = 28;   // Expected input height for Toeplitz construction
-    uint32_t input_width = 28;    // Expected input width for Toeplitz construction
-    uint32_t stride = 2;
+    uint32_t input_height = 24;   // Expected input height for Toeplitz construction
+    uint32_t input_width = 24;    // Expected input width for Toeplitz construction
+    uint32_t stride = 1;
     uint32_t padding = 0;
     uint32_t dilation = 1;
-    uint32_t input_gap = 1;
+    uint32_t input_gap = 2;
     uint32_t output_gap = 1;
 
     // ========================================================================
@@ -292,7 +292,7 @@ int main(int argc, char* argv[]) {
             PrintMatrix(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap));
             break;
         case 2:
-            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), 64*2*2*2*2*2*2);
+            DiagonalConv_Packing(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), 64*2*2*2*2*2*2*2);
             break;
         case 3:
             MatrixVectorProduct_Diag(ConstructConv2DToeplitz(inputKernel, input_height, input_width, stride, padding, dilation, input_gap, output_gap), EncodeMatrix(input2DMatrix, 64));
