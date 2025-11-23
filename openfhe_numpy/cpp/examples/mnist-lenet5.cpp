@@ -500,7 +500,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t scaleModSize = 40;
     uint32_t firstModSize = 50;
     uint32_t ringDim = 32768;
-    SecurityLevel sl = HEStd_NotSet;
+    SecurityLevel sl = HEStd_128_classic;
     BINFHE_PARAMSET slBin = TOY;
     uint32_t logQ_ccLWE = 25;
     uint32_t slots = 8192;
@@ -509,7 +509,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     // Bootstrapping parameters
     std::vector<uint32_t> levelBudget = {4, 4};
     std::vector<uint32_t> bsgsDim = {0, 0};
-    uint32_t levelsAvailableAfterBootstrap = 12;
+    uint32_t levelsAvailableAfterBootstrap = 10;
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
     uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
 
@@ -541,21 +541,18 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "Number of slots: " << slots << std::endl;
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
     std::cout << "Activation function: " << activationName << std::endl;
-
-    // ========== Bootstrapping Setup ==========
-    std::cout << "\nSetting up bootstrapping..." << std::endl;
-    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
-
+    
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
     TimeVar t;
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
+    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
     cc->EvalBootstrapKeyGen(keys.secretKey, slots);
 
     // Setup scheme switching only if needed
-    double scaleSignFHEW = 4.0;
+    double scaleSignFHEW = 1.0;
     if (activationType == ActivationType::SCHEME_SWITCH) {
         SchSwchParams params;
         params.SetSecurityLevelCKKS(sl);
@@ -911,13 +908,13 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     // Layer 1: Conv1
     std::cout << "\n[Layer 1] Conv1 (28x28x1 -> 24x24x6)..." << std::endl;
-    auto ptConv1Diags = MakeCKKSPackedPlaintextVectors(cc, conv1Diagonals);
     auto conv1BiasVec = PrepareBiasVector(trainedWeights.conv1_bias, conv1FlatSize, conv1OutputChannels, conv1OutputHeight * conv1OutputWidth);
     auto ptConv1Bias = cc->MakeCKKSPackedPlaintext(conv1BiasVec);
 
     TIC(t);
     // ctInput = cc->EvalRotate(ctInput, -conv1Cols);
-    auto ctConv1 = EvalMultMatVecDiag(ctInput, ptConv1Diags, 2, conv1Rotations, 0, &conv1NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctConv1 = EvalMultMatVecDiag(ctInput, conv1Diagonals, 2, conv1Rotations, 0, &conv1NonZeros);
 
     // Add bias
     ctConv1 = cc->EvalAdd(ctConv1, ptConv1Bias);
@@ -925,9 +922,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     double conv1Time = TOC(t);
     std::cout << "  Time: " << conv1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctConv1->GetLevel() << std::endl;
-
-    ptConv1Diags.clear();
-    ptConv1Diags.shrink_to_fit();
 
     // Validation: Compare encrypted vs cleartext Conv1 output
     if (enableValidation) {
@@ -955,8 +949,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearReLU1, encReLU1, "Activation1", 1e-1);
     }
 
-    auto ptPool1Diags = MakeCKKSPackedPlaintextVectors(cc, pool1Diagonals);
-
     // Layer 3: AvgPool1
     std::cout << "\n[Layer 3] AvgPool1 (24x24x6 -> 12x12x6";
     if (pool1_output_gap > 1) {
@@ -965,7 +957,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << ")..." << std::endl;
     TIC(t);
     // cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -pool1Cols));
-    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, ptPool1Diags, 2, pool1Rotations, 0, &pool1NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, pool1Diagonals, 2, pool1Rotations, 0, &pool1NonZeros);
     double pool1Time = TOC(t);
     std::cout << "  Time: " << pool1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool1->GetLevel() << std::endl;
@@ -980,9 +973,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         encPool1.resize(pool1FlatSize);
         CompareVectors(clearPool1, encPool1, "AvgPool1", 1e-1);
     }
-
-    ptPool1Diags.clear();
-    ptPool1Diags.shrink_to_fit();
 
     // Bootstrap if needed (when levels are low)
     double bootstrap1Time = 0.0;
@@ -999,7 +989,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptConv2Diags = MakeCKKSPackedPlaintextVectors(cc, conv2Diagonals);
     auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2_multiplexed_size, conv2OutputChannels,
                                           conv2OutputHeight * conv2OutputWidth, conv2_output_gap,
                                           conv2OutputHeight, conv2OutputWidth);
@@ -1014,7 +1003,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(cc->EvalRotate(ctPool1, -conv2Cols), -conv2Cols));
-    auto ctConv2 = EvalMultMatVecDiag(ctPool1, ptConv2Diags, 2, conv2Rotations, 0, &conv2NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctConv2 = EvalMultMatVecDiag(ctPool1, conv2Diagonals, 2, conv2Rotations, 0, &conv2NonZeros);
 
     // Add bias
     ctConv2 = cc->EvalAdd(ctConv2, ptConv2Bias);
@@ -1033,9 +1023,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         encConv2.resize(conv2FlatSize);
         CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
     }
-
-    ptConv2Diags.clear();
-    ptConv2Diags.shrink_to_fit();
 
     // Layer 5: Activation2
     std::cout << "\n[Layer 5] Activation2 (" << activationName << ")..." << std::endl;
@@ -1056,8 +1043,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearReLU2, encReLU2, "Activation2", 1e-1);
     }
 
-    auto ptPool2Diags = MakeCKKSPackedPlaintextVectors(cc, pool2Diagonals);
-
     // Layer 6: AvgPool2
     std::cout << "\n[Layer 6] AvgPool2 (8x8x16 -> 4x4x16";
     if (pool2_output_gap > 1) {
@@ -1066,7 +1051,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << ")..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -pool2Cols));
-    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, ptPool2Diags, 2, pool2Rotations, 0, &pool2NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, pool2Diagonals, 2, pool2Rotations, 0, &pool2NonZeros);
     double pool2Time = TOC(t);
     std::cout << "  Time: " << pool2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool2->GetLevel() << std::endl;
@@ -1081,9 +1067,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         encPool2.resize(pool2FlatSize);
         CompareVectors(clearPool2, encPool2, "AvgPool2", 1e-1);
     }
-
-    ptPool2Diags.clear();
-    ptPool2Diags.shrink_to_fit();
 
     // Bootstrap if needed (when levels are low)
     double bootstrap2Time = 0.0;
@@ -1100,7 +1083,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense1Diags = MakeCKKSPackedPlaintextVectors(cc, dense1Diagonals);
     auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
     auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
 
@@ -1108,7 +1090,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "\n[Layer 7] Dense1 (unmultiplex " << pool2_multiplexed_size << " -> " << pool2FlatSize << " -> " << dense1Output << ")..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
-    auto ctDense1 = EvalMultMatVecDiag(ctPool2, ptDense1Diags, 2, dense1Rotations, 0, &dense1NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctDense1 = EvalMultMatVecDiag(ctPool2, dense1Diagonals, 2, dense1Rotations, 0, &dense1NonZeros);
 
     // Add bias
     ctDense1 = cc->EvalAdd(ctDense1, ptDense1Bias);
@@ -1125,9 +1108,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::vector<double> encDense1 = ptDense1Result->GetRealPackedValue();
         CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
     }
-
-    ptDense1Diags.clear();
-    ptDense1Diags.shrink_to_fit();
 
     // Layer 8: Activation3
     std::cout << "\n[Layer 8] Activation3 (" << activationName << ")..." << std::endl;
@@ -1161,7 +1141,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense2Diags = MakeCKKSPackedPlaintextVectors(cc, dense2Diagonals);
     auto dense2BiasVec = PrepareBiasVector(trainedWeights.fc2_bias, dense2Output);
     auto ptDense2Bias = cc->MakeCKKSPackedPlaintext(dense2BiasVec);
 
@@ -1169,7 +1148,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "\n[Layer 9] Dense2 (120 -> 84)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
-    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, ptDense2Diags, 2, dense2Rotations, 0, &dense2NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, dense2Diagonals, 2, dense2Rotations, 0, &dense2NonZeros);
 
     // Add bias
     ctDense2 = cc->EvalAdd(ctDense2, ptDense2Bias);
@@ -1186,9 +1166,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::vector<double> encDense2 = ptDense2Result->GetRealPackedValue();
         CompareVectors(clearDense2, encDense2, "Dense2", 1e-1);
     }
-
-    ptDense2Diags.clear();
-    ptDense2Diags.shrink_to_fit();
 
     // Layer 10: Activation4
     std::cout << "\n[Layer 10] Activation4 (" << activationName << ")..." << std::endl;
@@ -1222,7 +1199,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
-    auto ptDense3Diags = MakeCKKSPackedPlaintextVectors(cc, dense3Diagonals);
     auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
     auto ptDense3Bias = cc->MakeCKKSPackedPlaintext(dense3BiasVec);
 
@@ -1230,7 +1206,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "\n[Layer 11] Dense3 (84 -> 10)..." << std::endl;
     TIC(t);
     cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
-    auto ctOutput = EvalMultMatVecDiag(ctReLU4, ptDense3Diags, 2, dense3Rotations, 0, &dense3NonZeros);
+    // TESTING: Use raw diagonals directly instead of encoded plaintexts
+    auto ctOutput = EvalMultMatVecDiag(ctReLU4, dense3Diagonals, 2, dense3Rotations, 0, &dense3NonZeros);
 
     // Add bias
     ctOutput = cc->EvalAdd(ctOutput, ptDense3Bias);
@@ -1247,9 +1224,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::vector<double> encDense3 = ptDense3Result->GetRealPackedValue();
         CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
     }
-
-    ptDense3Diags.clear();
-    ptDense3Diags.shrink_to_fit();
 
     double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
                                 pool2Time + bootstrap2Time + dense1Time + relu3Time + bootstrap3Time +

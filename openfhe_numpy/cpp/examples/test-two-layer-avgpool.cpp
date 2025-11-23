@@ -301,13 +301,15 @@ void TestTwoLayerAvgPool() {
     auto toeplitzPool1 = ConstructConv2DToeplitz(avgpool1Kernel, input_height, input_width, pool_stride, 0, 1, 1, 1);
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
     std::size_t pool1Cols = pool1Diagonals.size();
-    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, true);
+    std::vector<bool> pool1NonZeros(pool1Cols);
+    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, true);
     std::cout << "  AvgPool1 Toeplitz: " << pool1Cols << " rows, " << pool1Rotations.size() << " rotation keys needed" << std::endl;
 
     auto toeplitzPool2 = ConstructConv2DToeplitz(avgpool2Kernel, pool1_out_height, pool1_out_width, pool_stride, 0, 1, 1, 1);
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
     std::size_t pool2Cols = pool2Diagonals.size();
-    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, true);
+    std::vector<bool> pool2NonZeros(pool2Cols);
+    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, true);
     std::cout << "  AvgPool2 Toeplitz: " << pool2Cols << " rows, " << pool2Rotations.size() << " rotation keys needed" << std::endl;
 
     // Collect all rotation indices

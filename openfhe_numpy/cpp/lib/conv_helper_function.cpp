@@ -647,11 +647,31 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
             uint32_t M = 2 * cryptoContext->GetRingDimension();
             auto digits = cryptoContext->EvalFastRotationPrecompute(ctVector);
 
+            // Determine which baby steps are actually needed (have at least one non-zero diagonal)
+            std::vector<bool> babyStepNeeded(babyStep, false);
+            if (nonzero_mask != nullptr) {
+                for (uint32_t i = 0; i < giantStep; i++) {
+                    for (uint32_t j = 0; j < babyStep; j++) {
+                        uint32_t idx = i * babyStep + j;
+                        if (idx >= diagonals.size()) break;
+                        if (idx < nonzero_mask->size() && (*nonzero_mask)[idx]) {
+                            babyStepNeeded[j] = true;
+                        }
+                    }
+                }
+            } else {
+                // No mask provided - need all baby steps
+                std::fill(babyStepNeeded.begin(), babyStepNeeded.end(), true);
+            }
+
+            // Only compute needed baby step rotations
             std::vector<Ciphertext<DCRTPoly>> fastRotation(babyStep);
             #pragma omp parallel for
             for (uint32_t j = 0; j < babyStep; j++) {
-                // std::cout << j << std::endl;
-                fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);
+                if (babyStepNeeded[j]) {
+                    // std::cout << j << std::endl;
+                    fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);
+                }
             }
 
             bool first_result = true;  // Track if this is the first non-zero giant step result
