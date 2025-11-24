@@ -514,7 +514,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     // Bootstrapping parameters
     uint32_t levelsAvailableAfterBootstrap = ChebyMultDepth+1;
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
-    uint32_t multDepth;
+    uint32_t multDepth = 1;
     if (activationType == ActivationType::CHEBYSHEV) {
         multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
     } else if (activationType == ActivationType::SQUARE) {
