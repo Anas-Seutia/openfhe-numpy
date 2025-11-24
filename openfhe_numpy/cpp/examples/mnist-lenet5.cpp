@@ -503,7 +503,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     uint32_t scaleModSize = 59;
     uint32_t firstModSize = 60;
-    uint32_t ringDim = 8192*2;
+    uint32_t ringDim = 65536;
     std::vector<uint32_t> levelBudget = {3, 3};
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
