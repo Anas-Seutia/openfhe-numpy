@@ -669,7 +669,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
             #pragma omp parallel for
             for (uint32_t j = 0; j < babyStep; j++) {
                 if (babyStepNeeded[j]) {
-                    // std::cout << j << std::endl;
+                    // std::cout << j << "(b), ";
                     fastRotation[j] = cryptoContext->EvalFastRotation(ctVector, j, M, digits);
                 }
             }
@@ -724,6 +724,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                 // Only process if we had at least one non-zero diagonal in this giant step
                 if (!first_nonzero) {
                     auto innerDigits = cryptoContext->EvalFastRotationPrecompute(inner);
+                    // std::cout << i * babyStep << "(g), ";
                     auto rotated = cryptoContext->EvalFastRotation(inner, i * babyStep, M, innerDigits);
 
                     if (first_result) {
@@ -734,6 +735,7 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                     }
                 }
             }
+            // std::cout << std::endl;
             break;
         }
         default:

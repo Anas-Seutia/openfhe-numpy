@@ -494,43 +494,50 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
 
+    uint32_t ChebyDegree = 119;
+    uint32_t ChebyMultDepth = 8;
+
     ScalingTechnique scTech = FLEXIBLEAUTO;
     SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
 
-    uint32_t scaleModSize = 40;
-    uint32_t firstModSize = 50;
-    uint32_t ringDim = 32768;
-    SecurityLevel sl = HEStd_128_classic;
+    uint32_t scaleModSize = 59;
+    uint32_t firstModSize = 60;
+    uint32_t ringDim = 65536;
+    std::vector<uint32_t> levelBudget = {3, 3};
+    std::vector<uint32_t> bsgsDim = {0, 0};
+    SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = TOY;
     uint32_t logQ_ccLWE = 25;
     uint32_t slots = 8192;
     uint32_t batchSize = slots;
 
     // Bootstrapping parameters
-    std::vector<uint32_t> levelBudget = {4, 4};
-    std::vector<uint32_t> bsgsDim = {0, 0};
-    uint32_t levelsAvailableAfterBootstrap = 10;
+    uint32_t levelsAvailableAfterBootstrap = ChebyMultDepth+1;
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
-    uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
+    if (activationType == ActivationType::CHEBYSHEV) {
+        uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
+    } else if (activationType == ActivationType::SQUARE) {
+        multDepth = 15;
+    } else {
+        multDepth = 22;
+    }
 
     CCParams<CryptoContextCKKSRNS> parameters;
+    parameters.SetRingDim(ringDim);
     parameters.SetMultiplicativeDepth(multDepth);
     parameters.SetScalingModSize(scaleModSize);
     parameters.SetFirstModSize(firstModSize);
     parameters.SetScalingTechnique(scTech);
     parameters.SetSecurityLevel(sl);
-    parameters.SetRingDim(ringDim);
     parameters.SetBatchSize(batchSize);
     parameters.SetSecretKeyDist(secretKeyDist);
-    parameters.SetKeySwitchTechnique(HYBRID);
-    parameters.SetNumLargeDigits(3);
 
     CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
     cc->Enable(PKE);
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
-    cc->Enable(FHE);  // Enable bootstrapping
+    if (multDepth < approxBootstrapDepth) cc->Enable(FHE);  // Enable bootstrapping
 
     // Only enable scheme switching if needed
     if (activationType == ActivationType::SCHEME_SWITCH) {
@@ -541,6 +548,22 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << "Number of slots: " << slots << std::endl;
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
     std::cout << "Activation function: " << activationName << std::endl;
+
+    std::cout << "Ring dimension: " << cc->GetRingDimension() << std::endl;
+    std::cout << "Number of moduli: " << cc->GetCryptoParameters()->GetElementParams()->GetParams().size() << std::endl;
+
+    // Calculate actual logQ
+    auto moduli = cc->GetCryptoParameters()->GetElementParams()->GetParams();
+    uint32_t firstLogQ = moduli[0]->GetModulus().GetMSB();
+    std::cout << "Q[i]: " << firstLogQ;
+    uint32_t actualLogQ = firstLogQ;
+    for (size_t i = 1; i < moduli.size(); i++) {
+        uint32_t bits = moduli[i]->GetModulus().GetMSB();
+        actualLogQ += bits;
+        std::cout << "|" << bits;
+    }
+    std::cout << std::endl << "Total logQ: " << actualLogQ << std::endl;
+    std::cout << "Multiplicative depth: " << multDepth << std::endl;
     
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
@@ -548,8 +571,10 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
-    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
-    cc->EvalBootstrapKeyGen(keys.secretKey, slots);
+    if (multDepth > approxBootstrapDepth) {
+        cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
+        cc->EvalBootstrapKeyGen(keys.secretKey, slots);
+    }
 
     // Setup scheme switching only if needed
     double scaleSignFHEW = 1.0;
@@ -570,6 +595,11 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         auto beta = ccLWE->GetBeta().ConvertToInt();
         auto pLWE = modulus_LWE / (2 * beta);
         cc->EvalCompareSwitchPrecompute(pLWE, scaleSignFHEW);
+
+        std::cout << "FHEW scheme is using lattice parameter " << ccLWE->GetParams()->GetLWEParams()->Getn();
+        std::cout << ", logQ " << logQ_ccLWE;
+        std::cout << ", modulus q " << ccLWE->GetParams()->GetLWEParams()->Getq() << std::endl << std::endl;
+        std::cout << ", and precision " << ccLWE->GetMaxPlaintextSpace().ConvertToInt();  // Small precision << std::endl << std::endl;
     }
 
     std::cout << "Key generation time: " << TOC(t) << " ms" << std::endl;
@@ -931,11 +961,25 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::vector<double> encConv1 = ptConv1Result->GetRealPackedValue();
         CompareVectors(clearConv1, encConv1, "Conv1", 1e-1);
     }
+    
+    // // Bootstrap if needed (when levels are low)
+    double bootstrap1Time = 0.0;
+    uint32_t levelsRemaining1 = multDepth - ctConv1->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after Conv1" << std::endl;
+    if (multDepth > approxBootstrapDepth && multDepth < approxBootstrapDepth && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
+        TIC(t);
+        ctConv1 = cc->EvalBootstrap(ctConv1);
+        bootstrap1Time = TOC(t);
+        std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctConv1->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+    }
 
     // Layer 2: Activation1
     std::cout << "\n[Layer 2] Activation1 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU1 = EvalActivation(cc, ctConv1, activationType, keys.publicKey, conv1FlatSize, slots, scaleSignFHEW, 5, -1272.325288, 861.832868, trainedWeights.scale1);
+    auto ctReLU1 = EvalActivation(cc, ctConv1, activationType, keys.publicKey, conv1FlatSize, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(clearConv1.begin(), clearConv1.end())), std::ceil(*std::max_element(clearConv1.begin(), clearConv1.end())), trainedWeights.scale1);
     double relu1Time = TOC(t);
     std::cout << "  Time: " << relu1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU1->GetLevel() << std::endl;
@@ -974,21 +1018,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearPool1, encPool1, "AvgPool1", 1e-1);
     }
 
-    // Bootstrap if needed (when levels are low)
-    double bootstrap1Time = 0.0;
-    uint32_t levelsRemaining1 = multDepth - ctPool1->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after AvgPool1" << std::endl;
-    if (levelsRemaining1 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
-        TIC(t);
-        ctPool1 = cc->EvalBootstrap(ctPool1);
-        bootstrap1Time = TOC(t);
-        std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
-        std::cout << "  Levels after bootstrap: " << (multDepth - ctPool1->GetLevel()) << std::endl;
-    } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
-    }
-
     auto conv2BiasVec = PrepareBiasVector(trainedWeights.conv2_bias, conv2_multiplexed_size, conv2OutputChannels,
                                           conv2OutputHeight * conv2OutputWidth, conv2_output_gap,
                                           conv2OutputHeight, conv2OutputWidth);
@@ -1024,10 +1053,24 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
     }
 
+    // Bootstrap if needed (when levels are low)
+    double bootstrap2Time = 0.0;
+    uint32_t levelsRemaining2 = multDepth - ctConv2->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after AvgPool2" << std::endl;
+    if (multDepth > approxBootstrapDepth && multDepth < approxBootstrapDepth && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
+        TIC(t);
+        ctConv2 = cc->EvalBootstrap(ctConv2);
+        bootstrap2Time = TOC(t);
+        std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctConv2->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+    }
+
     // Layer 5: Activation2
     std::cout << "\n[Layer 5] Activation2 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU2 = EvalActivation(cc, ctConv2, activationType, keys.publicKey, conv2_multiplexed_size, slots, scaleSignFHEW, 5, -1657.532905, 1155.935255, trainedWeights.scale2);
+    auto ctReLU2 = EvalActivation(cc, ctConv2, activationType, keys.publicKey, conv2_multiplexed_size, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(clearConv2.begin(), clearConv2.end())), std::ceil(*std::max_element(clearConv2.begin(), clearConv2.end())), trainedWeights.scale2);
     double relu2Time = TOC(t);
     std::cout << "  Time: " << relu2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU2->GetLevel() << std::endl;
@@ -1068,21 +1111,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearPool2, encPool2, "AvgPool2", 1e-1);
     }
 
-    // Bootstrap if needed (when levels are low)
-    double bootstrap2Time = 0.0;
-    uint32_t levelsRemaining2 = multDepth - ctPool2->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after AvgPool2" << std::endl;
-    if (levelsRemaining2 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
-        TIC(t);
-        ctPool2 = cc->EvalBootstrap(ctPool2);
-        bootstrap2Time = TOC(t);
-        std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
-        std::cout << "  Levels after bootstrap: " << (multDepth - ctPool2->GetLevel()) << std::endl;
-    } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
-    }
-
     auto dense1BiasVec = PrepareBiasVector(trainedWeights.fc1_bias, dense1Output);
     auto ptDense1Bias = cc->MakeCKKSPackedPlaintext(dense1BiasVec);
 
@@ -1109,10 +1137,24 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
     }
 
+    // Bootstrap if needed (when levels are low)
+    double bootstrap3Time = 0.0;
+    uint32_t levelsRemaining3 = multDepth - ctDense1->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining3 << " levels remaining after Dense1" << std::endl;
+    if (multDepth > approxBootstrapDepth && levelsRemaining3 <= levelsAvailableAfterBootstrap+1) {
+        TIC(t);
+        ctDense1 = cc->EvalBootstrap(ctDense1);
+        bootstrap3Time = TOC(t);
+        std::cout << "  Time: " << bootstrap3Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctDense1->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+    }
+
     // Layer 8: Activation3
     std::cout << "\n[Layer 8] Activation3 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU3 = EvalActivation(cc, ctDense1, activationType, keys.publicKey, dense1Output, slots, scaleSignFHEW, 5, -1147.812610, 677.169142, trainedWeights.scale3);
+    auto ctReLU3 = EvalActivation(cc, ctDense1, activationType, keys.publicKey, dense1Output, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(clearDense1.begin(), clearDense1.end())), std::ceil(*std::max_element(clearDense1.begin(), clearDense1.end())), trainedWeights.scale3);
     double relu3Time = TOC(t);
     std::cout << "  Time: " << relu3Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU3->GetLevel() << std::endl;
@@ -1127,15 +1169,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     // Bootstrap if needed (when levels are low)
-    double bootstrap3Time = 0.0;
-    uint32_t levelsRemaining3 = multDepth - ctReLU3->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining3 << " levels remaining after Activation3" << std::endl;
-    if (levelsRemaining3 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
+    double bootstrap4Time = 0.0;
+    uint32_t levelsRemaining4 = multDepth - ctReLU3->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining4 << " levels remaining after Activation3" << std::endl;
+    if (multDepth > approxBootstrapDepth && levelsRemaining4 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctReLU3 = cc->EvalBootstrap(ctReLU3);
-        bootstrap3Time = TOC(t);
-        std::cout << "  Time: " << bootstrap3Time << " ms" << std::endl;
+        bootstrap4Time = TOC(t);
+        std::cout << "  Time: " << bootstrap4Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU3->GetLevel()) << std::endl;
     } else {
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
@@ -1167,10 +1208,24 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearDense2, encDense2, "Dense2", 1e-1);
     }
 
+    // Bootstrap if needed (when levels are low)
+    double bootstrap5Time = 0.0;
+    uint32_t levelsRemaining5 = multDepth - ctDense2->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining5 << " levels remaining after Dense2" << std::endl;
+    if (multDepth > approxBootstrapDepth && levelsRemaining5 <= levelsAvailableAfterBootstrap+1) {
+        TIC(t);
+        ctDense2 = cc->EvalBootstrap(ctDense2);
+        bootstrap5Time = TOC(t);
+        std::cout << "  Time: " << bootstrap5Time << " ms" << std::endl;
+        std::cout << "  Levels after bootstrap: " << (multDepth - ctDense2->GetLevel()) << std::endl;
+    } else {
+        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+    }
+
     // Layer 10: Activation4
     std::cout << "\n[Layer 10] Activation4 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctReLU4 = EvalActivation(cc, ctDense2, activationType, keys.publicKey, dense2Output, slots, scaleSignFHEW, 5, -318.306115, 331.310290, trainedWeights.scale4);
+    auto ctReLU4 = EvalActivation(cc, ctDense2, activationType, keys.publicKey, dense2Output, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(clearDense2.begin(), clearDense2.end())), std::ceil(*std::max_element(clearDense2.begin(), clearDense2.end())), trainedWeights.scale4);
     double relu4Time = TOC(t);
     std::cout << "  Time: " << relu4Time << " ms" << std::endl;
     std::cout << "  Level: " << ctReLU4->GetLevel() << std::endl;
@@ -1182,21 +1237,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         ptReLU4Result->SetLength(dense2Output);
         std::vector<double> encReLU4 = ptReLU4Result->GetRealPackedValue();
         CompareVectors(clearReLU4, encReLU4, "Activation4", 1e-1);
-    }
-
-    // Bootstrap if needed (when levels are low)
-    double bootstrap4Time = 0.0;
-    uint32_t levelsRemaining4 = multDepth - ctReLU4->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining4 << " levels remaining after Activation4" << std::endl;
-    if (levelsRemaining4 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
-        TIC(t);
-        ctReLU4 = cc->EvalBootstrap(ctReLU4);
-        bootstrap4Time = TOC(t);
-        std::cout << "  Time: " << bootstrap4Time << " ms" << std::endl;
-        std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU4->GetLevel()) << std::endl;
-    } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
     }
 
     auto dense3BiasVec = PrepareBiasVector(trainedWeights.fc3_bias, dense3Output);
@@ -1226,9 +1266,9 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
-                                pool2Time + bootstrap2Time + dense1Time + relu3Time + bootstrap3Time +
-                                dense2Time + relu4Time + bootstrap4Time + dense3Time;
-    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time + bootstrap4Time;
+                                pool2Time + bootstrap2Time + dense1Time + bootstrap3Time + relu3Time + 
+                                bootstrap4Time + dense2Time + bootstrap5Time + relu4Time + dense3Time;
+    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time + bootstrap4Time + bootstrap5Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";
     if (totalBootstrapTime > 0) {
         std::cout << " (includes " << totalBootstrapTime << " ms bootstrapping)";
@@ -1272,28 +1312,31 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << std::string(80, '=') << std::endl;
     std::cout << std::left << std::setw(32) << "Layer" << std::setw(15) << "Time (ms)" << "Level" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
-    std::cout << std::left << std::setw(32) << "Conv1 (28x28x1 -> 24x24x6)" << std::setw(15) << conv1Time << ctConv1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Activation1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "AvgPool1 (24x24x6 -> 12x12x6)" << std::setw(15) << pool1Time << (bootstrap1Time > 0 ? "N/A" : std::to_string(ctPool1->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Conv1 (28x28x1 -> 24x24x6)" << std::setw(15) << conv1Time << (bootstrap1Time > 0 ? "N/A" : std::to_string(ctConv1->GetLevel())) << std::endl;
     if (bootstrap1Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap1" << std::setw(15) << bootstrap1Time << ctPool1->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap1" << std::setw(15) << bootstrap1Time << ctConv1->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(32) << "Conv2 (12x12x6 -> 8x8x16)" << std::setw(15) << conv2Time << ctConv2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Activation2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "AvgPool2 (8x8x16 -> 4x4x16)" << std::setw(15) << pool2Time << (bootstrap2Time > 0 ? "N/A" : std::to_string(ctPool2->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "AvgPool1 (24x24x6 -> 12x12x6)" << std::setw(15) << pool1Time << ctPool1->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Conv2 (12x12x6 -> 8x8x16)" << std::setw(15) << conv2Time << (bootstrap2Time > 0 ? "N/A" : std::to_string(ctConv2->GetLevel())) << std::endl;
     if (bootstrap2Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap2" << std::setw(15) << bootstrap2Time << ctPool2->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap2" << std::setw(15) << bootstrap2Time << ctConv2->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(32) << "Dense1 (256 -> 120)" << std::setw(15) << dense1Time << ctDense1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Activation3" << std::setw(15) << relu3Time << (bootstrap3Time > 0 ? "N/A" : std::to_string(ctReLU3->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "AvgPool2 (8x8x16 -> 4x4x16)" << std::setw(15) << pool2Time << ctPool2->GetLevel() << std::endl;
+    std::cout << std::left << std::setw(32) << "Dense1 (256 -> 120)" << std::setw(15) << dense1Time << (bootstrap3Time > 0 ? "N/A" : std::to_string(ctDense1->GetLevel())) << std::endl;
     if (bootstrap3Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap3" << std::setw(15) << bootstrap3Time << ctReLU3->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap3" << std::setw(15) << bootstrap3Time << ctDense1->GetLevel() << std::endl;
     }
-    std::cout << std::left << std::setw(32) << "Dense2 (120 -> 84)" << std::setw(15) << dense2Time << ctDense2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Activation4" << std::setw(15) << relu4Time << (bootstrap4Time > 0 ? "N/A" : std::to_string(ctReLU4->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Activation3" << std::setw(15) << relu3Time << (bootstrap4Time > 0 ? "N/A" : std::to_string(ctReLU3->GetLevel())) << std::endl;
     if (bootstrap4Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap4" << std::setw(15) << bootstrap4Time << ctReLU4->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap4" << std::setw(15) << bootstrap4Time << ctReLU3->GetLevel() << std::endl;
     }
+    std::cout << std::left << std::setw(32) << "Dense2 (120 -> 84)" << std::setw(15) << dense2Time << (bootstrap5Time > 0 ? "N/A" : std::to_string(ctDense2->GetLevel())) << std::endl;
+    if (bootstrap5Time > 0) {
+        std::cout << std::left << std::setw(32) << "  Bootstrap5" << std::setw(15) << bootstrap5Time << ctDense2->GetLevel() << std::endl;
+    }
+    std::cout << std::left << std::setw(32) << "Activation4" << std::setw(15) << relu4Time << ctReLU4->GetLevel() << std::endl;
     std::cout << std::left << std::setw(32) << "Dense3 (84 -> 10)" << std::setw(15) << dense3Time << ctOutput->GetLevel() << std::endl;
     std::cout << std::string(80, '-') << std::endl;
     std::cout << std::left << std::setw(32) << "Total Inference" << std::setw(15) << totalInferenceTime << std::endl;
