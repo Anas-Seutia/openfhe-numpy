@@ -519,7 +519,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
     } else if (activationType == ActivationType::SQUARE) {
         multDepth = 15;
-    } else {
+    } else if (activationType == ActivationType::SCHEME_SWITCH) {
         multDepth = 22;
     }
 
