@@ -538,7 +538,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
-    if (multDepth < approxBootstrapDepth) cc->Enable(FHE);  // Enable bootstrapping
+    if (multDepth > approxBootstrapDepth) cc->Enable(FHE);  // Enable bootstrapping
 
     // Only enable scheme switching if needed
     if (activationType == ActivationType::SCHEME_SWITCH) {
