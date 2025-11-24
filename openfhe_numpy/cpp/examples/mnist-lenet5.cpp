@@ -171,7 +171,6 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
 
     // ReLU(x) = -(x < 0) + 1
     // Step 1: Compute comparison result (x < 0)
-    std::cout << NextPow2(numSlots) << std::endl; 
     auto ctComparison = cc->EvalCompareSchemeSwitching(ct, ctZero, NextPow2(numSlots), totalSlots, 0, scaleSign);
 
     // Step 2: Multiply input by comparison result to get ReLU
