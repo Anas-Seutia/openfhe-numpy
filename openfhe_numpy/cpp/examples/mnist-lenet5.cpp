@@ -171,6 +171,7 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
 
     // ReLU(x) = -(x < 0) + 1
     // Step 1: Compute comparison result (x < 0)
+    std::cout << NextPow2(numSlots) << std::endl; 
     auto ctComparison = cc->EvalCompareSchemeSwitching(ct, ctZero, NextPow2(numSlots), totalSlots, 0, scaleSign);
 
     // Step 2: Multiply input by comparison result to get ReLU
@@ -502,7 +503,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     uint32_t scaleModSize = 59;
     uint32_t firstModSize = 60;
-    uint32_t ringDim = 65536;
+    uint32_t ringDim = 8192*2;
     std::vector<uint32_t> levelBudget = {3, 3};
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
@@ -962,20 +963,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::vector<double> encConv1 = ptConv1Result->GetRealPackedValue();
         CompareVectors(clearConv1, encConv1, "Conv1", 1e-1);
     }
-    
-    // // Bootstrap if needed (when levels are low)
-    double bootstrap1Time = 0.0;
-    uint32_t levelsRemaining1 = multDepth - ctConv1->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after Conv1" << std::endl;
-    if (multDepth > approxBootstrapDepth && multDepth < approxBootstrapDepth && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
-        TIC(t);
-        ctConv1 = cc->EvalBootstrap(ctConv1);
-        bootstrap1Time = TOC(t);
-        std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
-        std::cout << "  Levels after bootstrap: " << (multDepth - ctConv1->GetLevel()) << std::endl;
-    } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
-    }
 
     // Layer 2: Activation1
     std::cout << "\n[Layer 2] Activation1 (" << activationName << ")..." << std::endl;
@@ -1054,20 +1041,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearConv2, encConv2, "Conv2", 1e-1);
     }
 
-    // Bootstrap if needed (when levels are low)
-    double bootstrap2Time = 0.0;
-    uint32_t levelsRemaining2 = multDepth - ctConv2->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after AvgPool2" << std::endl;
-    if (multDepth > approxBootstrapDepth && multDepth < approxBootstrapDepth && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
-        TIC(t);
-        ctConv2 = cc->EvalBootstrap(ctConv2);
-        bootstrap2Time = TOC(t);
-        std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
-        std::cout << "  Levels after bootstrap: " << (multDepth - ctConv2->GetLevel()) << std::endl;
-    } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
-    }
-
     // Layer 5: Activation2
     std::cout << "\n[Layer 5] Activation2 (" << activationName << ")..." << std::endl;
     TIC(t);
@@ -1139,14 +1112,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     // Bootstrap if needed (when levels are low)
-    double bootstrap3Time = 0.0;
-    uint32_t levelsRemaining3 = multDepth - ctDense1->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining3 << " levels remaining after Dense1" << std::endl;
-    if (multDepth > approxBootstrapDepth && levelsRemaining3 <= levelsAvailableAfterBootstrap+1) {
+    double bootstrap1Time = 0.0;
+    uint32_t levelsRemaining1 = multDepth - ctDense1->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after Dense1" << std::endl;
+    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctDense1 = cc->EvalBootstrap(ctDense1);
-        bootstrap3Time = TOC(t);
-        std::cout << "  Time: " << bootstrap3Time << " ms" << std::endl;
+        bootstrap1Time = TOC(t);
+        std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctDense1->GetLevel()) << std::endl;
     } else {
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
@@ -1170,14 +1143,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     // Bootstrap if needed (when levels are low)
-    double bootstrap4Time = 0.0;
-    uint32_t levelsRemaining4 = multDepth - ctReLU3->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining4 << " levels remaining after Activation3" << std::endl;
-    if (multDepth > approxBootstrapDepth && levelsRemaining4 <= levelsAvailableAfterBootstrap+1) {
+    double bootstrap2Time = 0.0;
+    uint32_t levelsRemaining2 = multDepth - ctReLU3->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after Activation3" << std::endl;
+    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctReLU3 = cc->EvalBootstrap(ctReLU3);
-        bootstrap4Time = TOC(t);
-        std::cout << "  Time: " << bootstrap4Time << " ms" << std::endl;
+        bootstrap2Time = TOC(t);
+        std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctReLU3->GetLevel()) << std::endl;
     } else {
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
@@ -1210,14 +1183,14 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     // Bootstrap if needed (when levels are low)
-    double bootstrap5Time = 0.0;
-    uint32_t levelsRemaining5 = multDepth - ctDense2->GetLevel();
-    std::cout << "\n[Bootstrap Check] " << levelsRemaining5 << " levels remaining after Dense2" << std::endl;
-    if (multDepth > approxBootstrapDepth && levelsRemaining5 <= levelsAvailableAfterBootstrap+1) {
+    double bootstrap3Time = 0.0;
+    uint32_t levelsRemaining4 = multDepth - ctDense2->GetLevel();
+    std::cout << "\n[Bootstrap Check] " << levelsRemaining4 << " levels remaining after Dense2" << std::endl;
+    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining4 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctDense2 = cc->EvalBootstrap(ctDense2);
-        bootstrap5Time = TOC(t);
-        std::cout << "  Time: " << bootstrap5Time << " ms" << std::endl;
+        bootstrap3Time = TOC(t);
+        std::cout << "  Time: " << bootstrap3Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctDense2->GetLevel()) << std::endl;
     } else {
         std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
@@ -1267,9 +1240,9 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
-                                pool2Time + bootstrap2Time + dense1Time + bootstrap3Time + relu3Time + 
-                                bootstrap4Time + dense2Time + bootstrap5Time + relu4Time + dense3Time;
-    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time + bootstrap4Time + bootstrap5Time;
+                                pool2Time + bootstrap2Time + dense1Time + bootstrap1Time + relu3Time + 
+                                bootstrap2Time + dense2Time + bootstrap3Time + relu4Time + dense3Time;
+    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap1Time + bootstrap2Time + bootstrap3Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";
     if (totalBootstrapTime > 0) {
         std::cout << " (includes " << totalBootstrapTime << " ms bootstrapping)";
@@ -1313,29 +1286,23 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::cout << std::string(80, '=') << std::endl;
     std::cout << std::left << std::setw(32) << "Layer" << std::setw(15) << "Time (ms)" << "Level" << std::endl;
     std::cout << std::string(80, '-') << std::endl;
-    std::cout << std::left << std::setw(32) << "Conv1 (28x28x1 -> 24x24x6)" << std::setw(15) << conv1Time << (bootstrap1Time > 0 ? "N/A" : std::to_string(ctConv1->GetLevel())) << std::endl;
-    if (bootstrap1Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap1" << std::setw(15) << bootstrap1Time << ctConv1->GetLevel() << std::endl;
-    }
+    std::cout << std::left << std::setw(32) << "Conv1 (28x28x1 -> 24x24x6)" << std::setw(15) << conv1Time << std::to_string(ctConv1->GetLevel()) << std::endl;
     std::cout << std::left << std::setw(32) << "Activation1" << std::setw(15) << relu1Time << ctReLU1->GetLevel() << std::endl;
     std::cout << std::left << std::setw(32) << "AvgPool1 (24x24x6 -> 12x12x6)" << std::setw(15) << pool1Time << ctPool1->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Conv2 (12x12x6 -> 8x8x16)" << std::setw(15) << conv2Time << (bootstrap2Time > 0 ? "N/A" : std::to_string(ctConv2->GetLevel())) << std::endl;
-    if (bootstrap2Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap2" << std::setw(15) << bootstrap2Time << ctConv2->GetLevel() << std::endl;
-    }
+    std::cout << std::left << std::setw(32) << "Conv2 (12x12x6 -> 8x8x16)" << std::setw(15) << conv2Time << std::to_string(ctConv2->GetLevel()) << std::endl;
     std::cout << std::left << std::setw(32) << "Activation2" << std::setw(15) << relu2Time << ctReLU2->GetLevel() << std::endl;
     std::cout << std::left << std::setw(32) << "AvgPool2 (8x8x16 -> 4x4x16)" << std::setw(15) << pool2Time << ctPool2->GetLevel() << std::endl;
-    std::cout << std::left << std::setw(32) << "Dense1 (256 -> 120)" << std::setw(15) << dense1Time << (bootstrap3Time > 0 ? "N/A" : std::to_string(ctDense1->GetLevel())) << std::endl;
+    std::cout << std::left << std::setw(32) << "Dense1 (256 -> 120)" << std::setw(15) << dense1Time << (bootstrap1Time > 0 ? "N/A" : std::to_string(ctDense1->GetLevel())) << std::endl;
+    if (bootstrap1Time > 0) {
+        std::cout << std::left << std::setw(32) << "  Bootstrap3" << std::setw(15) << bootstrap1Time << ctDense1->GetLevel() << std::endl;
+    }
+    std::cout << std::left << std::setw(32) << "Activation3" << std::setw(15) << relu3Time << (bootstrap2Time > 0 ? "N/A" : std::to_string(ctReLU3->GetLevel())) << std::endl;
+    if (bootstrap2Time > 0) {
+        std::cout << std::left << std::setw(32) << "  Bootstrap4" << std::setw(15) << bootstrap2Time << ctReLU3->GetLevel() << std::endl;
+    }
+    std::cout << std::left << std::setw(32) << "Dense2 (120 -> 84)" << std::setw(15) << dense2Time << (bootstrap3Time > 0 ? "N/A" : std::to_string(ctDense2->GetLevel())) << std::endl;
     if (bootstrap3Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap3" << std::setw(15) << bootstrap3Time << ctDense1->GetLevel() << std::endl;
-    }
-    std::cout << std::left << std::setw(32) << "Activation3" << std::setw(15) << relu3Time << (bootstrap4Time > 0 ? "N/A" : std::to_string(ctReLU3->GetLevel())) << std::endl;
-    if (bootstrap4Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap4" << std::setw(15) << bootstrap4Time << ctReLU3->GetLevel() << std::endl;
-    }
-    std::cout << std::left << std::setw(32) << "Dense2 (120 -> 84)" << std::setw(15) << dense2Time << (bootstrap5Time > 0 ? "N/A" : std::to_string(ctDense2->GetLevel())) << std::endl;
-    if (bootstrap5Time > 0) {
-        std::cout << std::left << std::setw(32) << "  Bootstrap5" << std::setw(15) << bootstrap5Time << ctDense2->GetLevel() << std::endl;
+        std::cout << std::left << std::setw(32) << "  Bootstrap5" << std::setw(15) << bootstrap3Time << ctDense2->GetLevel() << std::endl;
     }
     std::cout << std::left << std::setw(32) << "Activation4" << std::setw(15) << relu4Time << ctReLU4->GetLevel() << std::endl;
     std::cout << std::left << std::setw(32) << "Dense3 (84 -> 10)" << std::setw(15) << dense3Time << ctOutput->GetLevel() << std::endl;
