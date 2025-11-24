@@ -93,13 +93,12 @@ Makefile
 Testing/
 install_manifest.txt
 
-# Datasets
-openfhe_numpy/cpp/data/*
+# Dataset sample
 data/MNIST/*
 
 # Models
 export*.py
-openfhe_numpy/cpp/models/*
+*.pt
 
 # Claude memory
 CLAUDE.md

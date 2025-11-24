@@ -1,0 +1,2 @@
+label: 7
+shape: 28 28
