@@ -470,12 +470,17 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
 
+    uint32_t ChebyDegree = 119;
+    uint32_t ChebyMultDepth = 8;
+
     ScalingTechnique scTech = FLEXIBLEAUTO;
     SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
 
-    uint32_t scaleModSize = 40;
-    uint32_t firstModSize = 50;
-    uint32_t ringDim = 8192;
+    uint32_t scaleModSize = 59;
+    uint32_t firstModSize = 60;
+    uint32_t ringDim = 32768;
+    std::vector<uint32_t> levelBudget = {3, 3};
+    std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = TOY;
     uint32_t logQ_ccLWE = 25;
@@ -483,14 +488,16 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t batchSize = slots;
 
     // Bootstrapping parameters
-    std::vector<uint32_t> levelBudget = {4, 4};
-    std::vector<uint32_t> bsgsDim = {0, 0};
-    uint32_t levelsAvailableAfterBootstrap = 1;
+    uint32_t levelsAvailableAfterBootstrap = ChebyMultDepth + 1;
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
-    uint32_t multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
-
-    if (scTech == FLEXIBLEAUTOEXT)
-        multDepth += 1;
+    uint32_t multDepth = 1;
+    if (activationType == ActivationType::CHEBYSHEV) {
+        multDepth = 22;
+    } else if (activationType == ActivationType::SQUARE) {
+        multDepth = 8;
+    } else if (activationType == ActivationType::SCHEME_SWITCH) {
+        multDepth = 16;
+    }
 
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(multDepth);
@@ -501,15 +508,13 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     parameters.SetRingDim(ringDim);
     parameters.SetBatchSize(batchSize);
     parameters.SetSecretKeyDist(secretKeyDist);
-    parameters.SetKeySwitchTechnique(HYBRID);
-    parameters.SetNumLargeDigits(3);
 
     CryptoContext<DCRTPoly> cc = GenCryptoContext(parameters);
     cc->Enable(PKE);
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
-    cc->Enable(FHE);  // Enable bootstrapping
+    if (multDepth > approxBootstrapDepth) cc->Enable(FHE);  // Enable bootstrapping
 
     // Enable scheme switching if using that activation type
     if (activationType == ActivationType::SCHEME_SWITCH) {
@@ -527,11 +532,13 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
-    cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
-    cc->EvalBootstrapKeyGen(keys.secretKey, slots);
+    if (multDepth > approxBootstrapDepth) {
+        cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
+        cc->EvalBootstrapKeyGen(keys.secretKey, slots);
+    }
 
     // Setup scheme switching parameters if needed
-    double scaleSignFHEW = 8.0;
+    double scaleSignFHEW = 1.0;
     if (activationType == ActivationType::SCHEME_SWITCH) {
         SchSwchParams params;
         params.SetSecurityLevelCKKS(sl);
@@ -733,7 +740,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     // Layer 2: Activation1
     std::cout << "\n[Layer 2] Activation1 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctAct1 = EvalActivation(cc, ctConvOut, activationType, keys.publicKey, multiplexedFlattenedSize, slots, scaleSignFHEW, 5, -1091.112454, 785.874507, scale1);
+    auto ctAct1 = EvalActivation(cc, ctConvOut, activationType, keys.publicKey, multiplexedFlattenedSize, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(clearConv.begin(), clearConv.end())), std::ceil(*std::max_element(clearConv.begin(), clearConv.end())), scale1);
     double act1Time = TOC(t);
     std::cout << "  Time: " << act1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctAct1->GetLevel() << std::endl;
@@ -751,8 +758,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     double bootstrap1Time = 0.0;
     uint32_t levelsRemaining1 = multDepth - ctAct1->GetLevel();
     std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after Activation1" << std::endl;
-    if (levelsRemaining1 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
+    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctAct1 = cc->EvalBootstrap(ctAct1);
         bootstrap1Time = TOC(t);
@@ -778,18 +784,19 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::cout << "  Level: " << ctDense1Out->GetLevel() << std::endl;
 
     // Validation: Compare encrypted vs cleartext Dense1 output
+    std::vector<double> encDense1;
     if (enableValidation) {
         Plaintext ptDense1Result;
         cc->Decrypt(keys.secretKey, ctDense1Out, &ptDense1Result);
         ptDense1Result->SetLength(dense1Output);
-        std::vector<double> encDense1 = ptDense1Result->GetRealPackedValue();
+        encDense1 = ptDense1Result->GetRealPackedValue();
         CompareVectors(clearDense1, encDense1, "Dense1", 1e-1);
     }
 
     // Layer 4: Activation2
     std::cout << "\n[Layer 4] Activation2 (" << activationName << ")..." << std::endl;
     TIC(t);
-    auto ctAct2 = EvalActivation(cc, ctDense1Out, activationType, keys.publicKey, 64, slots, scaleSignFHEW, 5, -696.255919, 702.676476, scale2);
+    auto ctAct2 = EvalActivation(cc, ctDense1Out, activationType, keys.publicKey, 64, slots, scaleSignFHEW, ChebyDegree, std::floor(*std::min_element(encDense1.begin(), encDense1.end())), std::ceil(*std::max_element(encDense1.begin(), encDense1.end())), scale2);
     double act2Time = TOC(t);
     std::cout << "  Time: " << act2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctAct2->GetLevel() << std::endl;
@@ -807,8 +814,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     double bootstrap2Time = 0.0;
     uint32_t levelsRemaining2 = multDepth - ctAct2->GetLevel();
     std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after Activation2" << std::endl;
-    if (levelsRemaining2 < 5) {
-        std::cout << "  Bootstrapping (< 5 levels remaining)..." << std::endl;
+    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctAct2 = cc->EvalBootstrap(ctAct2);
         bootstrap2Time = TOC(t);
