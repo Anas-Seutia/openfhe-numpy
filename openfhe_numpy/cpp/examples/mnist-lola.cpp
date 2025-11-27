@@ -491,18 +491,29 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t levelsAvailableAfterBootstrap = ChebyMultDepth + 1;
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
     uint32_t multDepth = 1;
+    bool enableBootstrapping = false;  // Track if bootstrapping is needed
+
     if (activationType == ActivationType::CHEBYSHEV) {
         // conv + act + fc + act + fc
-        multDepth = std::min(uint32_t((1 + ChebyMultDepth + 1 + ChebyMultDepth + 1)),
-                            std::max({1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1);
+        uint32_t option1 = 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1;
+        uint32_t option2 = std::max({1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1;
+        // Prefer option1 unless option2 saves 4+ layers (threshold of 3)
+        enableBootstrapping = (option2 + 3 < option1);
+        multDepth = enableBootstrapping ? option2 : option1;
     } else if (activationType == ActivationType::SQUARE) {
         // conv + act + fc + act + fc
-        multDepth = std::min(uint32_t((1 + 2 + 1 + 2 + 1)),
-                            std::max({1U,2U,1U,2U,1U}) + approxBootstrapDepth + 1);
+        uint32_t option1 = 1 + 2 + 1 + 2 + 1;
+        uint32_t option2 = std::max({1U,2U,1U,2U,1U}) + approxBootstrapDepth + 1;
+        // Prefer option1 unless option2 saves 4+ layers (threshold of 3)
+        enableBootstrapping = (option2 + 3 < option1);
+        multDepth = enableBootstrapping ? option2 : option1;
     } else if (activationType == ActivationType::SCHEME_SWITCH) {
         // conv + act + fc + act + fc
-        multDepth = std::min(uint32_t((1 + 13 + 1 + 1 + 1)),
-                            std::max({1U,13U,1U,1U,1U}) + approxBootstrapDepth + 1);
+        uint32_t option1 = 1 + 13 + 1 + 1 + 1;
+        uint32_t option2 = std::max({1U,13U,1U,1U,1U}) + approxBootstrapDepth + 1;
+        // Prefer option1 unless option2 saves 4+ layers (threshold of 3)
+        enableBootstrapping = (option2 + 3 < option1);
+        multDepth = enableBootstrapping ? option2 : option1;
     }
 
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -520,7 +531,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
-    if (multDepth > approxBootstrapDepth) cc->Enable(FHE);  // Enable bootstrapping
+    if (enableBootstrapping) cc->Enable(FHE);  // Enable bootstrapping only if needed
 
     // Enable scheme switching if using that activation type
     if (activationType == ActivationType::SCHEME_SWITCH) {
@@ -538,7 +549,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
-    if (multDepth > approxBootstrapDepth) {
+    if (enableBootstrapping) {
         cc->EvalBootstrapSetup(levelBudget, bsgsDim, slots);
         cc->EvalBootstrapKeyGen(keys.secretKey, slots);
     }
@@ -764,14 +775,14 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     double bootstrap1Time = 0.0;
     uint32_t levelsRemaining1 = multDepth - ctAct1->GetLevel();
     std::cout << "\n[Bootstrap Check] " << levelsRemaining1 << " levels remaining after Activation1" << std::endl;
-    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
+    if (enableBootstrapping && activationType == ActivationType::CHEBYSHEV && levelsRemaining1 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctAct1 = cc->EvalBootstrap(ctAct1);
         bootstrap1Time = TOC(t);
         std::cout << "  Time: " << bootstrap1Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctAct1->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels or disabled)" << std::endl;
     }
 
     // Layer 3: Dense 1 (unmultiplex -> 720 -> 64)
@@ -820,14 +831,14 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     double bootstrap2Time = 0.0;
     uint32_t levelsRemaining2 = multDepth - ctAct2->GetLevel();
     std::cout << "\n[Bootstrap Check] " << levelsRemaining2 << " levels remaining after Activation2" << std::endl;
-    if (activationType == ActivationType::CHEBYSHEV && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
+    if (enableBootstrapping && activationType == ActivationType::CHEBYSHEV && levelsRemaining2 <= levelsAvailableAfterBootstrap+1) {
         TIC(t);
         ctAct2 = cc->EvalBootstrap(ctAct2);
         bootstrap2Time = TOC(t);
         std::cout << "  Time: " << bootstrap2Time << " ms" << std::endl;
         std::cout << "  Levels after bootstrap: " << (multDepth - ctAct2->GetLevel()) << std::endl;
     } else {
-        std::cout << "  Skipping bootstrap (sufficient levels)" << std::endl;
+        std::cout << "  Skipping bootstrap (sufficient levels or disabled)" << std::endl;
     }
 
     // Layer 5: Dense 2 (64 -> 10)
