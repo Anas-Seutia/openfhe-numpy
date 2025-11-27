@@ -518,15 +518,15 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     if (activationType == ActivationType::CHEBYSHEV) {
         // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
         multDepth = std::min(1 + 1 + ChebyMultDepth + 1 + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 - (2),
-                            std::max({1,1,ChebyMultDepth,1,1,ChebyMultDepth,1,ChebyMultDepth,1,ChebyMultDepth,1}) + approxBootstrapDepth + 1);
+                            std::max({1U,1U,ChebyMultDepth,1U,1U,ChebyMultDepth,1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
         // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
-        multDepth = std::min(1 + 1 + 2 + 1 + 1 + 2 + 1 + 2 + 1 + 2 + 1 - (2),
-                            std::max({1,1,2,1,1,2,1,2,1,2,1}) + approxBootstrapDepth + 1);
+        multDepth = std::min(uint32_t(1 + 1 + 2 + 1 + 1 + 2 + 1 + 2 + 1 + 2 + 1 - (2)),
+                            std::max({1U,1U,2U,1U,1U,2U,1U,2U,1U,2U,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SCHEME_SWITCH) {
         // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
-        multDepth = std::min(1 + 1 + 13 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 - (2),
-                            std::max({1,1,13,1,1,1,1,1,1,1,1}) + approxBootstrapDepth + 1);
+        multDepth = std::min(uint32_t(1 + 1 + 13 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 - (2)),
+                            std::max({1U,1U,13U,1U,1U,1U,1U,1U,1U,1U,1U}) + approxBootstrapDepth + 1);
     }
 
     CCParams<CryptoContextCKKSRNS> parameters;

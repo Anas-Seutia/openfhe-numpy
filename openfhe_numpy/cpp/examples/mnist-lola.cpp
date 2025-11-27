@@ -494,15 +494,15 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     if (activationType == ActivationType::CHEBYSHEV) {
         // conv + act + fc + act + fc
         multDepth = std::min((1 + ChebyMultDepth + 1 + ChebyMultDepth + 1) - (2),
-                            std::max({1,ChebyMultDepth,1,ChebyMultDepth,1}) + approxBootstrapDepth + 1);
+                            std::max({1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
         // conv + act + fc + act + fc
-        multDepth = std::min((1 + 2 + 1 + 2 + 1) - (2),
-                            std::max({1,2,1,2,1}) + approxBootstrapDepth + 1);
+        multDepth = std::min(uint32_t((1 + 2 + 1 + 2 + 1) - (2)),
+                            std::max({1U,2U,1U,2U,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SCHEME_SWITCH) {
         // conv + act + fc + act + fc
-        multDepth = std::min((1 + 13 + 1 + 1 + 1) - (2),
-                            std::max({1,13,1,1,1}) + approxBootstrapDepth + 1);
+        multDepth = std::min(uint32_t((1 + 13 + 1 + 1 + 1) - (2)),
+                            std::max({1U,13U,1U,1U,1U}) + approxBootstrapDepth + 1);
     }
 
     CCParams<CryptoContextCKKSRNS> parameters;
