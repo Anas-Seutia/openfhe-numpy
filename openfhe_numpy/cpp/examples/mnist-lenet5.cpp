@@ -565,7 +565,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
     std::cout << std::endl << "Total logQ: " << actualLogQ << std::endl;
     std::cout << "Multiplicative depth: " << multDepth << std::endl;
-    
+
     // ========== Key Generation ==========
     std::cout << "\nGenerating keys..." << std::endl;
     TimeVar t;
@@ -727,7 +727,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> conv1Diagonals = PackMatDiagWise(toeplitzConv1, batchSize);
     std::size_t conv1Cols = conv1Diagonals.size();
     std::vector<bool> conv1NonZeros(conv1Cols);
-    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, &conv1NonZeros, true);
+    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, &conv1NonZeros, false);
     std::cout << "  Conv1 Toeplitz: " << conv1Cols << " rows, "
               << conv1Rotations.size() << " non-zero diagonals" << std::endl;
 
@@ -736,7 +736,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
     std::size_t pool1Cols = pool1Diagonals.size();
     std::vector<bool> pool1NonZeros(pool1Cols);
-    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, true);
+    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, false);
     std::cout << "  AvgPool1 Toeplitz: " << pool1Cols << " rows, "
               << pool1Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -745,7 +745,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> conv2Diagonals = PackMatDiagWise(toeplitzConv2, batchSize);
     std::size_t conv2Cols = conv2Diagonals.size();
     std::vector<bool> conv2NonZeros(conv2Cols);
-    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, &conv2NonZeros, true);
+    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, &conv2NonZeros, false);
     std::cout << "  Conv2 Toeplitz: " << conv2Cols << " rows, "
               << conv2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -754,7 +754,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
     std::size_t pool2Cols = pool2Diagonals.size();
     std::vector<bool> pool2NonZeros(pool2Cols);
-    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, true);
+    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, false);
     std::cout << "  AvgPool2 Toeplitz: " << pool2Cols << " rows, "
               << pool2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -763,21 +763,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1, batchSize);
     std::size_t dense1Cols = dense1Diagonals.size();
     std::vector<bool> dense1NonZeros(dense1Cols);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, true);
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, false);
     std::cout << "  Dense1: " << dense1Cols << " rows, "
               << dense1Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::size_t dense2Cols = dense2Diagonals.size();
     std::vector<bool> dense2NonZeros(dense2Cols);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, true);
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, false);
     std::cout << "  Dense2: " << dense2Cols << " rows, "
               << dense2Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense3Diagonals = PackMatDiagWise(dense3Weights, batchSize);
     std::size_t dense3Cols = dense3Diagonals.size();
     std::vector<bool> dense3NonZeros(dense3Cols);
-    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, &dense3NonZeros, true);
+    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, &dense3NonZeros, false);
     std::cout << "  Dense3: " << dense3Cols << " rows, "
               << dense3Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -945,7 +945,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     // ctInput = cc->EvalRotate(ctInput, -conv1Cols);
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctConv1 = EvalMultMatVecDiag(ctInput, conv1Diagonals, 2, conv1Rotations, 0, &conv1NonZeros);
+    auto ctConv1 = EvalMultMatVecDiag(ctInput, conv1Diagonals, 1, conv1Rotations, 0, &conv1NonZeros);
 
     // Add bias
     ctConv1 = cc->EvalAdd(ctConv1, ptConv1Bias);
@@ -989,7 +989,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     // cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -pool1Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, pool1Diagonals, 2, pool1Rotations, 0, &pool1NonZeros);
+    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, pool1Diagonals, 1, pool1Rotations, 0, &pool1NonZeros);
     double pool1Time = TOC(t);
     std::cout << "  Time: " << pool1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool1->GetLevel() << std::endl;
@@ -1020,7 +1020,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(cc->EvalRotate(ctPool1, -conv2Cols), -conv2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctConv2 = EvalMultMatVecDiag(ctPool1, conv2Diagonals, 2, conv2Rotations, 0, &conv2NonZeros);
+    auto ctConv2 = EvalMultMatVecDiag(ctPool1, conv2Diagonals, 1, conv2Rotations, 0, &conv2NonZeros);
 
     // Add bias
     ctConv2 = cc->EvalAdd(ctConv2, ptConv2Bias);
@@ -1068,7 +1068,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -pool2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, pool2Diagonals, 2, pool2Rotations, 0, &pool2NonZeros);
+    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, pool2Diagonals, 1, pool2Rotations, 0, &pool2NonZeros);
     double pool2Time = TOC(t);
     std::cout << "  Time: " << pool2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool2->GetLevel() << std::endl;
@@ -1092,7 +1092,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctDense1 = EvalMultMatVecDiag(ctPool2, dense1Diagonals, 2, dense1Rotations, 0, &dense1NonZeros);
+    auto ctDense1 = EvalMultMatVecDiag(ctPool2, dense1Diagonals, 1, dense1Rotations, 0, &dense1NonZeros);
 
     // Add bias
     ctDense1 = cc->EvalAdd(ctDense1, ptDense1Bias);
@@ -1163,7 +1163,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, dense2Diagonals, 2, dense2Rotations, 0, &dense2NonZeros);
+    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, dense2Diagonals, 1, dense2Rotations, 0, &dense2NonZeros);
 
     // Add bias
     ctDense2 = cc->EvalAdd(ctDense2, ptDense2Bias);
@@ -1220,7 +1220,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctOutput = EvalMultMatVecDiag(ctReLU4, dense3Diagonals, 2, dense3Rotations, 0, &dense3NonZeros);
+    auto ctOutput = EvalMultMatVecDiag(ctReLU4, dense3Diagonals, 1, dense3Rotations, 0, &dense3NonZeros);
 
     // Add bias
     ctOutput = cc->EvalAdd(ctOutput, ptDense3Bias);
@@ -1239,7 +1239,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     }
 
     double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
-                                pool2Time + bootstrap2Time + dense1Time + bootstrap1Time + relu3Time + 
+                                pool2Time + bootstrap2Time + dense1Time + bootstrap1Time + relu3Time +
                                 bootstrap2Time + dense2Time + bootstrap3Time + relu4Time + dense3Time;
     double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap1Time + bootstrap2Time + bootstrap3Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";

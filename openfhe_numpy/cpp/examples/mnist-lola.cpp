@@ -332,7 +332,7 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     auto ctComparison = cc->EvalCompareSchemeSwitching(ct, ctZero, NextPow2(numSlots), totalSlots, 0, scaleSign);
 
     // Step 2: Multiply input by comparison result to get ReLU
-    // The comparison returns 1 if x > 0, 0 otherwise
+    // The comparison returns 1 if x < 0, 0 otherwise
     // We need to invert: (1 - comparison) to get mask
     auto ctReLU = cc->EvalMult(ct, cc->EvalSub(1, ctComparison));
 
@@ -611,7 +611,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> convDiagonals = PackMatDiagWise(toeplitzConv, batchSize);
     std::size_t convCols = convDiagonals.size();
     std::vector<bool> convNonZeros(convCols);
-    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, &convNonZeros, true);
+    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, &convNonZeros, false);
     std::cout << "  Conv Toeplitz: " << toeplitzConv.size() << " rows (multiplexed), "
               << toeplitzConv[0].size() << " cols, "
               << convRotations.size() << " rotation keys needed" << std::endl;
@@ -621,7 +621,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1, batchSize);
     std::size_t dense1Cols = dense1Diagonals.size();
     std::vector<bool> dense1NonZeros(dense1Cols);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, true);
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, false);
     std::cout << "  Dense1: " << dense1.size() << " rows, "
               << dense1[0].size() << " cols (multiplexed input), "
               << dense1Rotations.size() << " rotation keys needed" << std::endl;
@@ -630,7 +630,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::size_t dense2Cols = dense2Diagonals.size();
     std::vector<bool> dense2NonZeros(dense2Cols);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, true);
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, false);
     std::cout << "  Dense2: " << dense2Cols << " rows, "
               << dense2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -721,7 +721,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     TIC(t);
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctConvOut = EvalMultMatVecDiag(ctInput, convDiagonals, 2, convRotations, 0, &convNonZeros);
+    auto ctConvOut = EvalMultMatVecDiag(ctInput, convDiagonals, 1, convRotations, 0, &convNonZeros);
     ctConvOut = cc->EvalAdd(ctConvOut, ptConvBias);
 
     double convTime = TOC(t);
@@ -776,7 +776,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     cc->EvalAddInPlace(ctAct1, cc->EvalRotate(ctAct1, -dense1Cols));
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, dense1Diagonals, 2, dense1Rotations, 0, &dense1NonZeros);
+    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, dense1Diagonals, 1, dense1Rotations, 0, &dense1NonZeros);
     ctDense1Out = cc->EvalAdd(ctDense1Out, ptDense1Bias);
 
     double dense1Time = TOC(t);
@@ -832,7 +832,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     cc->EvalAddInPlace(ctAct2, cc->EvalRotate(ctAct2, -dense2Cols));
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctOutput = EvalMultMatVecDiag(ctAct2, dense2Diagonals, 2, dense2Rotations, 0, &dense2NonZeros);
+    auto ctOutput = EvalMultMatVecDiag(ctAct2, dense2Diagonals, 1, dense2Rotations, 0, &dense2NonZeros);
     ctOutput = cc->EvalAdd(ctOutput, ptDense2Bias);
 
     double dense2Time = TOC(t);
