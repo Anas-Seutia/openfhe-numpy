@@ -516,11 +516,17 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
     uint32_t multDepth = 1;
     if (activationType == ActivationType::CHEBYSHEV) {
-        multDepth = levelsAvailableAfterBootstrap + approxBootstrapDepth;
+        // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
+        multDepth = std::min(1 + 1 + ChebyMultDepth + 1 + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 - (2),
+                            std::max(1,1,ChebyMultDepth,1,1,ChebyMultDepth,1,ChebyMultDepth,1,ChebyMultDepth,1) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
-        multDepth = 15;
+        // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
+        multDepth = std::min(1 + 1 + 2 + 1 + 1 + 2 + 1 + 2 + 1 + 2 + 1 - (2)),
+                            std::max(1,1,2,1,1,2,1,2,1,2,1) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SCHEME_SWITCH) {
-        multDepth = 22;
+        // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
+        multDepth = std::min(1 + 1 + 13 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 - (2),
+                            std::max(1,1,13,1,1,1,1,1,1,1,1) + approxBootstrapDepth + 1);
     }
 
     CCParams<CryptoContextCKKSRNS> parameters;

@@ -492,11 +492,17 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t approxBootstrapDepth = FHECKKSRNS::GetBootstrapDepth(levelBudget, secretKeyDist);
     uint32_t multDepth = 1;
     if (activationType == ActivationType::CHEBYSHEV) {
-        multDepth = 22;
+        // conv + act + fc + act + fc
+        multDepth = std::min((1 + ChebyMultDepth + 1 + ChebyMultDepth + 1) - (2),
+                            std::max(1,ChebyMultDepth,1,ChebyMultDepth,1) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
-        multDepth = 8;
+        // conv + act + fc + act + fc
+        multDepth = std::min((1 + 2 + 1 + 2 + 1) - (2),
+                            std::max(1,2,1,2,1) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SCHEME_SWITCH) {
-        multDepth = 16;
+        // conv + act + fc + act + fc
+        multDepth = std::min((1 + 13 + 1 + 1 + 1) - (2),
+                            std::max(1,13,1,1,1) + approxBootstrapDepth + 1);
     }
 
     CCParams<CryptoContextCKKSRNS> parameters;
