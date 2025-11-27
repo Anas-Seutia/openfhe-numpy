@@ -688,64 +688,79 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
                 }
             }
 
-            bool first_result = true;  // Track if this is the first non-zero giant step result
-            for (uint32_t i = 0; i < giantStep; i++) {
-                Ciphertext<DCRTPoly> inner;
-                bool first_nonzero = true;
+            // Parallelize giant step computation
+            std::vector<Ciphertext<DCRTPoly>> giantStepResults(giantStep);
+            std::vector<bool> giantStepValid(giantStep, false);
 
+            #pragma omp parallel for
+            for (uint32_t i = 0; i < giantStep; i++) {
+                // Step 1: Collect indices for non-zero diagonals in this giant step
+                std::vector<uint32_t> activeIndices;
                 for (uint32_t j = 0; j < babyStep; j++) {
                     uint32_t idx = i * babyStep + j;
-                    if (idx >= diagonals.size()) break;  // Handle incomplete last giant step
+                    if (idx >= diagonals.size()) break;
 
-                    // Skip if diagonal is zero (when mask is provided)
                     if (nonzero_mask != nullptr && idx < nonzero_mask->size()) {
-                        if (!(*nonzero_mask)[idx]) continue;
+                        if ((*nonzero_mask)[idx]) {
+                            activeIndices.push_back(j);
+                        }
+                    } else {
+                        activeIndices.push_back(j);
                     }
+                }
 
-                    // remove for after pre rotation diagonals by -babyStep * i
-                    int32_t jdx = static_cast<int32_t>(babyStep * i * -1);
-                    Ciphertext<DCRTPoly> ctProduct;
+                if (activeIndices.empty()) continue;
+
+                // Step 2: Parallelize product computation for this giant step
+                std::vector<Ciphertext<DCRTPoly>> products(activeIndices.size());
+                int32_t jdx = static_cast<int32_t>(babyStep * i * -1);
+
+                #pragma omp parallel for
+                for (size_t p = 0; p < activeIndices.size(); p++) {
+                    uint32_t j = activeIndices[p];
+                    uint32_t idx = i * babyStep + j;
+
                     if constexpr (std::is_same<T, Ciphertext<DCRTPoly>>::value) {
-                        // Diagonal is a ciphertext - rotate and multiply
                         auto preRotated = cryptoContext->EvalRotate(diagonals[idx], jdx);
-                        ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
+                        products[p] = cryptoContext->EvalMult(fastRotation[j], preRotated);
                     } else if constexpr (std::is_same<T, Plaintext>::value) {
-                        // Diagonal is plaintext - extract values, rotate, encode, multiply
                         std::vector<std::complex<double>> vecDiag = diagonals[idx]->GetCKKSPackedValue();
                         auto rotatedVec = lbcrypto::Rotate(vecDiag, jdx);
                         auto preRotated = cryptoContext->MakeCKKSPackedPlaintext(rotatedVec);
-                        ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
+                        products[p] = cryptoContext->EvalMult(fastRotation[j], preRotated);
                     } else {
-                        // Diagonal is raw vector<double> - convert to complex, rotate, encode, multiply
                         std::vector<std::complex<double>> vecDiag(diagonals[idx].size());
                         for (size_t k = 0; k < diagonals[idx].size(); ++k) {
                             vecDiag[k] = std::complex<double>(diagonals[idx][k], 0.0);
                         }
                         auto rotatedVec = lbcrypto::Rotate(vecDiag, jdx);
                         auto preRotated = cryptoContext->MakeCKKSPackedPlaintext(rotatedVec);
-                        ctProduct = cryptoContext->EvalMult(fastRotation[j], preRotated);
-                    }
-
-                    if (first_nonzero) {
-                        inner = ctProduct;
-                        first_nonzero = false;
-                    } else {
-                        cryptoContext->EvalAddInPlace(inner, ctProduct);
+                        products[p] = cryptoContext->EvalMult(fastRotation[j], preRotated);
                     }
                 }
 
-                // Step 2.5: Apply giant-step rotation with SECOND HOISTING
-                // Only process if we had at least one non-zero diagonal in this giant step
-                if (!first_nonzero) {
-                    auto innerDigits = cryptoContext->EvalFastRotationPrecompute(inner);
-                    // std::cout << i * babyStep << "(g), ";
-                    auto rotated = cryptoContext->EvalFastRotation(inner, i * babyStep, M, innerDigits);
+                // Step 3: Sequential accumulation of products for this giant step
+                Ciphertext<DCRTPoly> inner = products[0];
+                for (size_t p = 1; p < products.size(); p++) {
+                    cryptoContext->EvalAddInPlace(inner, products[p]);
+                }
 
+                // Step 4: Apply giant-step rotation with SECOND HOISTING
+                auto innerDigits = cryptoContext->EvalFastRotationPrecompute(inner);
+                // std::cout << i * babyStep << "(g), ";
+                giantStepResults[i] = cryptoContext->EvalFastRotation(inner, i * babyStep, M, innerDigits);
+                giantStepValid[i] = true;
+            }
+
+            // Final sequential accumulation of giant step results
+            bool first_result = true;
+            for (uint32_t i = 0; i < giantStep; i++) {
+                if (giantStepValid[i]) {
                     if (first_result) {
-                        ctResult = rotated;
+                        ctResult = giantStepResults[i];
                         first_result = false;
                     } else {
-                        cryptoContext->EvalAddInPlace(ctResult, rotated);
+                        cryptoContext->EvalAddInPlace(ctResult, giantStepResults[i]);
                     }
                 }
             }
