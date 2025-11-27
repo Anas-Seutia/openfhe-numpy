@@ -615,25 +615,39 @@ Ciphertext<DCRTPoly> EvalMultMatVecDiag(const Ciphertext<DCRTPoly>& ctVector,
         case 1: {
             uint32_t M = 2 * cryptoContext->GetRingDimension();
             auto precomp = cryptoContext->EvalFastRotationPrecompute(ctVector);
+
+            // Count valid rotations (>= 0)
+            std::vector<int32_t> validRotations;
             for (const int32_t rotation : rotations) {
                 if (rotation < 0) break;
-                ctRotated = cryptoContext->EvalFastRotation(ctVector, rotation, M, precomp);
+                validRotations.push_back(rotation);
+            }
+
+            // Parallelize rotation and multiplication
+            std::vector<Ciphertext<DCRTPoly>> products(validRotations.size());
+            #pragma omp parallel for
+            for (size_t i = 0; i < validRotations.size(); i++) {
+                int32_t rotation = validRotations[i];
+                auto ctRotated = cryptoContext->EvalFastRotation(ctVector, rotation, M, precomp);
 
                 // Handle different diagonal types
                 if constexpr (std::is_same<T, std::vector<double>>::value) {
                     // Encode raw vector before multiplication
                     auto encoded = cryptoContext->MakeCKKSPackedPlaintext(diagonals[rotation]);
-                    ctProduct = cryptoContext->EvalMult(ctRotated, encoded);
+                    products[i] = cryptoContext->EvalMult(ctRotated, encoded);
                 } else {
                     // Ciphertext or Plaintext - use directly
-                    ctProduct = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
+                    products[i] = cryptoContext->EvalMult(ctRotated, diagonals[rotation]);
                 }
+            }
 
+            // Sequential accumulation
+            for (size_t i = 0; i < products.size(); i++) {
                 if (first) {
-                    ctResult = ctProduct;
+                    ctResult = products[i];
                     first = false;
                 } else {
-                    cryptoContext->EvalAddInPlace(ctResult, ctProduct);
+                    cryptoContext->EvalAddInPlace(ctResult, products[i]);
                 }
             }
             break;
