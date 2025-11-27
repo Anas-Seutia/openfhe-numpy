@@ -493,7 +493,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t multDepth = 1;
     if (activationType == ActivationType::CHEBYSHEV) {
         // conv + act + fc + act + fc
-        multDepth = std::min((1 + ChebyMultDepth + 1 + ChebyMultDepth + 1) - (2),
+        multDepth = std::min(uint32_t((1 + ChebyMultDepth + 1 + ChebyMultDepth + 1) - (2)),
                             std::max({1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
         // conv + act + fc + act + fc

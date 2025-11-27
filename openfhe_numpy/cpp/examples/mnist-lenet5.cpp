@@ -517,7 +517,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t multDepth = 1;
     if (activationType == ActivationType::CHEBYSHEV) {
         // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
-        multDepth = std::min(1 + 1 + ChebyMultDepth + 1 + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 - (2),
+        multDepth = std::min(uint32_t(1 + 1 + ChebyMultDepth + 1 + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 + ChebyMultDepth + 1 - (2)),
                             std::max({1U,1U,ChebyMultDepth,1U,1U,ChebyMultDepth,1U,ChebyMultDepth,1U,ChebyMultDepth,1U}) + approxBootstrapDepth + 1);
     } else if (activationType == ActivationType::SQUARE) {
         // conv + avg + act + conv + avg + act + fc + act + fc + act + fc
