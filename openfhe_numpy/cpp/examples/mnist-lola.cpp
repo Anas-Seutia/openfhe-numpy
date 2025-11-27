@@ -588,7 +588,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     // Multiplexing parameters
     uint32_t input_gap = 1;
-    uint32_t output_gap = 2;
+    uint32_t output_gap = 1;
 
     uint32_t dense1Output = 64;
     uint32_t dense2Output = 10;

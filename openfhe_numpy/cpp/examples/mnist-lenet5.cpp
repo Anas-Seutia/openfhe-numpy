@@ -704,13 +704,13 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t conv1_output_gap = conv1_input_gap * 1;  // stride=1 -> output_gap=1
 
     uint32_t pool1_input_gap = conv1_output_gap;  // = 1
-    uint32_t pool1_output_gap = pool1_input_gap * 2;  // stride=2 -> output_gap=2
+    uint32_t pool1_output_gap = pool1_input_gap * 1;  // stride=2 -> output_gap=2
 
     uint32_t conv2_input_gap = pool1_output_gap;  // = 2
     uint32_t conv2_output_gap = conv2_input_gap * 1;  // stride=1 -> output_gap=2
 
     uint32_t pool2_input_gap = conv2_output_gap;  // = 2
-    uint32_t pool2_output_gap = pool2_input_gap * 2;  // stride=2 -> output_gap=4
+    uint32_t pool2_output_gap = pool2_input_gap * 1;  // stride=2 -> output_gap=4
 
     std::cout << "\nMultiplexing gaps:" << std::endl;
     std::cout << "  Conv1: input_gap=" << conv1_input_gap << ", output_gap=" << conv1_output_gap << std::endl;
