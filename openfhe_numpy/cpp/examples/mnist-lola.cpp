@@ -580,8 +580,9 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     double scaleSignFHEW = 1.0;
     if (activationType == ActivationType::SCHEME_SWITCH) {
         SchSwchParams params;
-        params.SetSecurityLevelCKKS(HEStd_128_classic);
+        params.SetSecurityLevelCKKS(sl);
         params.SetSecurityLevelFHEW(slBin);
+        params.SetRingDimension(503);
         params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
         params.SetNumSlotsCKKS(slots);
         params.SetNumValues(720);

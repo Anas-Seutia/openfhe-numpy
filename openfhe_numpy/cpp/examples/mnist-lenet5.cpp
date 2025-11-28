@@ -529,7 +529,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = TOY;
-    uint32_t logQ_ccLWE = 25;
+    uint32_t logQ_ccLWE = 27;
     uint32_t slots = 8192;
     uint32_t batchSize = slots;
 
@@ -620,8 +620,9 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     double scaleSignFHEW = 1.0;
     if (activationType == ActivationType::SCHEME_SWITCH) {
         SchSwchParams params;
-        params.SetSecurityLevelCKKS(HEStd_128_classic);
+        params.SetSecurityLevelCKKS(sl);
         params.SetSecurityLevelFHEW(slBin);
+        params.SetRingDimension(503);
         params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
         params.SetNumSlotsCKKS(slots);
         params.SetNumValues(3456);  // Max(24*24*6=3456, 12*12*6=864, 8*8*16=1024, 256, 120, 84)
