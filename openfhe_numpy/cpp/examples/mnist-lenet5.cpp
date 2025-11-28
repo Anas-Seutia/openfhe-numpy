@@ -529,7 +529,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = STD128;
-    uint32_t logQ_ccLWE = 27;
+    uint32_t logQ_ccLWE = 26;
     uint32_t slots = 8192;
     uint32_t batchSize = slots;
 

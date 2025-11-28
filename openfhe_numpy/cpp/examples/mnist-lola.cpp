@@ -505,7 +505,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
     BINFHE_PARAMSET slBin = STD128;
-    uint32_t logQ_ccLWE = 27;
+    uint32_t logQ_ccLWE = 26;
     uint32_t slots = 4096;
     uint32_t batchSize = slots;
 
