@@ -639,7 +639,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         std::cout << "FHEW scheme is using lattice parameter " << ccLWE->GetParams()->GetLWEParams()->Getn();
         std::cout << ", logQ " << logQ_ccLWE;
         std::cout << ", modulus q " << ccLWE->GetParams()->GetLWEParams()->Getq() << std::endl << std::endl;
-        std::cout << ", and precision " << ccLWE->GetMaxPlaintextSpace().ConvertToInt();  // Small precision << std::endl << std::endl;
     }
 
     std::cout << "Key generation time: " << TOC(t) << " ms" << std::endl;

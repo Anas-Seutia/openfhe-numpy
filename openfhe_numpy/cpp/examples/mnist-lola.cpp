@@ -595,6 +595,10 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
         auto beta = ccLWE->GetBeta().ConvertToInt();
         auto pLWE = modulus_LWE / (2 * beta);
         cc->EvalCompareSwitchPrecompute(pLWE, scaleSignFHEW);
+
+        std::cout << "FHEW scheme is using lattice parameter " << ccLWE->GetParams()->GetLWEParams()->Getn();
+        std::cout << ", logQ " << logQ_ccLWE;
+        std::cout << ", modulus q " << ccLWE->GetParams()->GetLWEParams()->Getq() << std::endl << std::endl;
     }
 
     std::cout << "  Key generation time: " << TOC(t) << " ms" << std::endl;
