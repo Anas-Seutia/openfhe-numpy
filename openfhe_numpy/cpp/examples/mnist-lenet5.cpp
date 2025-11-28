@@ -1279,10 +1279,10 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
     }
 
-    double totalInferenceTime = conv1Time + relu1Time + pool1Time + bootstrap1Time + conv2Time + relu2Time +
-                                pool2Time + bootstrap2Time + dense1Time + bootstrap1Time + relu3Time +
+    double totalInferenceTime = conv1Time + relu1Time + pool1Time + conv2Time + relu2Time +
+                                pool2Time + dense1Time + bootstrap1Time + relu3Time +
                                 bootstrap2Time + dense2Time + bootstrap3Time + relu4Time + dense3Time;
-    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap1Time + bootstrap2Time + bootstrap3Time;
+    double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";
     if (totalBootstrapTime > 0) {
         std::cout << " (includes " << totalBootstrapTime << " ms bootstrapping)";
