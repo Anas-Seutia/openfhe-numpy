@@ -441,7 +441,7 @@ void CompareVectors(
 
 // ========== CLEARTEXT VALIDATION FUNCTIONS (END) ==========
 
-void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = false) {
+void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = true) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -1363,7 +1363,7 @@ int main(int argc, char* argv[]) {
         uint32_t chebyDegree = 119;
         uint32_t chebyMultDepth = 8;
         bool useOptimized = false;
-        bool enableValidation = false;
+        bool enableValidation = true;
 
         // Parse command line arguments
         if (argc > 1) {
