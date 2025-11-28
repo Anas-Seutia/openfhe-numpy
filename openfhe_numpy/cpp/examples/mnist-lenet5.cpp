@@ -49,6 +49,31 @@ enum class ActivationType {
  */
 
 /**
+ * @brief Map Chebyshev polynomial degree to multiplicative depth
+ * Based on: https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/FUNCTION_EVALUATION.md
+ */
+uint32_t GetChebyDepthFromDegree(uint32_t degree) {
+    if (degree >= 3 && degree <= 5) return 4;
+    if (degree >= 6 && degree <= 13) return 5;
+    if (degree >= 14 && degree <= 27) return 6;
+    if (degree >= 28 && degree <= 59) return 7;
+    if (degree >= 60 && degree <= 119) return 8;
+    if (degree >= 120 && degree <= 247) return 9;
+    if (degree >= 248 && degree <= 495) return 10;
+    if (degree >= 496 && degree <= 1007) return 11;
+    if (degree >= 1008 && degree <= 2031) return 12;
+    if (degree >= 2032 && degree <= 4031) return 13;
+    if (degree >= 4032 && degree <= 8127) return 14;
+    if (degree >= 8128 && degree <= 16255) return 15;
+    if (degree >= 16256 && degree <= 32639) return 16;
+    if (degree >= 32640 && degree <= 65279) return 17;
+    if (degree >= 65280 && degree <= 130815) return 18;
+    if (degree >= 130816 && degree <= 261631) return 19;
+
+    throw std::runtime_error("Chebyshev degree out of supported range (3-261631)");
+}
+
+/**
  * @brief Print min/max bounds of decrypted vector
  */
 void PrintBounds(const std::vector<double>& vec, const std::string& name) {
@@ -416,7 +441,7 @@ void CompareVectors(
 
 // ========== CLEARTEXT VALIDATION FUNCTIONS (END) ==========
 
-void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, bool enableValidation = false) {
+void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = false) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -493,9 +518,6 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
 
     // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
-
-    uint32_t ChebyDegree = 119;
-    uint32_t ChebyMultDepth = 8;
 
     ScalingTechnique scTech = FLEXIBLEAUTO;
     SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
@@ -715,21 +737,22 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     uint32_t dense3Output = 10;
     std::cout << "  Dense3: " << dense3Input << " -> " << dense3Output << std::endl;
 
-    // Multiplexing parameters
-    // Rule: input_gap = last layer's output_gap, output_gap = input_gap * stride
+    // Multiplexing parameters (optimized vs unoptimized)
+    // Rule: input_gap = last layer's output_gap, output_gap = input_gap * stride (if optimized)
     uint32_t conv1_input_gap = 1;    // Initial input, no multiplexing
-    uint32_t conv1_output_gap = conv1_input_gap * 1;  // stride=1 -> output_gap=1
+    uint32_t conv1_output_gap = useOptimized ? (conv1_input_gap * 1) : 1;  // stride=1
 
-    uint32_t pool1_input_gap = conv1_output_gap;  // = 1
-    uint32_t pool1_output_gap = pool1_input_gap * 1;  // stride=2 -> output_gap=2
+    uint32_t pool1_input_gap = conv1_output_gap;
+    uint32_t pool1_output_gap = useOptimized ? (pool1_input_gap * 2) : 1;  // stride=2
 
-    uint32_t conv2_input_gap = pool1_output_gap;  // = 2
-    uint32_t conv2_output_gap = conv2_input_gap * 1;  // stride=1 -> output_gap=2
+    uint32_t conv2_input_gap = pool1_output_gap;
+    uint32_t conv2_output_gap = useOptimized ? (conv2_input_gap * 1) : 1;  // stride=1
 
-    uint32_t pool2_input_gap = conv2_output_gap;  // = 2
-    uint32_t pool2_output_gap = pool2_input_gap * 1;  // stride=2 -> output_gap=4
+    uint32_t pool2_input_gap = conv2_output_gap;
+    uint32_t pool2_output_gap = useOptimized ? (pool2_input_gap * 2) : 1;  // stride=2
 
-    std::cout << "\nMultiplexing gaps:" << std::endl;
+    std::cout << "\nRunning in " << (useOptimized ? "optimized" : "unoptimized") << " mode" << std::endl;
+    std::cout << "Multiplexing gaps:" << std::endl;
     std::cout << "  Conv1: input_gap=" << conv1_input_gap << ", output_gap=" << conv1_output_gap << std::endl;
     std::cout << "  Pool1: input_gap=" << pool1_input_gap << ", output_gap=" << pool1_output_gap << std::endl;
     std::cout << "  Conv2: input_gap=" << conv2_input_gap << ", output_gap=" << conv2_output_gap << std::endl;
@@ -744,7 +767,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> conv1Diagonals = PackMatDiagWise(toeplitzConv1, batchSize);
     std::size_t conv1Cols = conv1Diagonals.size();
     std::vector<bool> conv1NonZeros(conv1Cols);
-    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, &conv1NonZeros, false);
+    std::vector<int32_t> conv1Rotations = getOptimalRots(conv1Diagonals, &conv1NonZeros, useOptimized);
     std::cout << "  Conv1 Toeplitz: " << conv1Cols << " rows, "
               << conv1Rotations.size() << " non-zero diagonals" << std::endl;
 
@@ -753,7 +776,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> pool1Diagonals = PackMatDiagWise(toeplitzPool1, batchSize);
     std::size_t pool1Cols = pool1Diagonals.size();
     std::vector<bool> pool1NonZeros(pool1Cols);
-    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, false);
+    std::vector<int32_t> pool1Rotations = getOptimalRots(pool1Diagonals, &pool1NonZeros, useOptimized);
     std::cout << "  AvgPool1 Toeplitz: " << pool1Cols << " rows, "
               << pool1Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -762,7 +785,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> conv2Diagonals = PackMatDiagWise(toeplitzConv2, batchSize);
     std::size_t conv2Cols = conv2Diagonals.size();
     std::vector<bool> conv2NonZeros(conv2Cols);
-    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, &conv2NonZeros, false);
+    std::vector<int32_t> conv2Rotations = getOptimalRots(conv2Diagonals, &conv2NonZeros, useOptimized);
     std::cout << "  Conv2 Toeplitz: " << conv2Cols << " rows, "
               << conv2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -771,7 +794,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> pool2Diagonals = PackMatDiagWise(toeplitzPool2, batchSize);
     std::size_t pool2Cols = pool2Diagonals.size();
     std::vector<bool> pool2NonZeros(pool2Cols);
-    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, false);
+    std::vector<int32_t> pool2Rotations = getOptimalRots(pool2Diagonals, &pool2NonZeros, useOptimized);
     std::cout << "  AvgPool2 Toeplitz: " << pool2Cols << " rows, "
               << pool2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -780,21 +803,21 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1, batchSize);
     std::size_t dense1Cols = dense1Diagonals.size();
     std::vector<bool> dense1NonZeros(dense1Cols);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, false);
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, useOptimized);
     std::cout << "  Dense1: " << dense1Cols << " rows, "
               << dense1Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::size_t dense2Cols = dense2Diagonals.size();
     std::vector<bool> dense2NonZeros(dense2Cols);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, false);
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, useOptimized);
     std::cout << "  Dense2: " << dense2Cols << " rows, "
               << dense2Rotations.size() << " rotation keys needed" << std::endl;
 
     std::vector<std::vector<double>> dense3Diagonals = PackMatDiagWise(dense3Weights, batchSize);
     std::size_t dense3Cols = dense3Diagonals.size();
     std::vector<bool> dense3NonZeros(dense3Cols);
-    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, &dense3NonZeros, false);
+    std::vector<int32_t> dense3Rotations = getOptimalRots(dense3Diagonals, &dense3NonZeros, useOptimized);
     std::cout << "  Dense3: " << dense3Cols << " rows, "
               << dense3Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -962,7 +985,8 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     // ctInput = cc->EvalRotate(ctInput, -conv1Cols);
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctConv1 = EvalMultMatVecDiag(ctInput, conv1Diagonals, 1, conv1Rotations, 0, &conv1NonZeros);
+    uint32_t hoistingMode = useOptimized ? 2 : 1;
+    auto ctConv1 = EvalMultMatVecDiag(ctInput, conv1Diagonals, hoistingMode, conv1Rotations, 0, &conv1NonZeros);
 
     // Add bias
     ctConv1 = cc->EvalAdd(ctConv1, ptConv1Bias);
@@ -1006,7 +1030,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     // cc->EvalAddInPlace(ctReLU1, cc->EvalRotate(ctReLU1, -pool1Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, pool1Diagonals, 1, pool1Rotations, 0, &pool1NonZeros);
+    auto ctPool1 = EvalMultMatVecDiag(ctReLU1, pool1Diagonals, hoistingMode, pool1Rotations, 0, &pool1NonZeros);
     double pool1Time = TOC(t);
     std::cout << "  Time: " << pool1Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool1->GetLevel() << std::endl;
@@ -1037,7 +1061,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(ctPool1, -conv2Cols));
     cc->EvalAddInPlace(ctPool1, cc->EvalRotate(cc->EvalRotate(ctPool1, -conv2Cols), -conv2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctConv2 = EvalMultMatVecDiag(ctPool1, conv2Diagonals, 1, conv2Rotations, 0, &conv2NonZeros);
+    auto ctConv2 = EvalMultMatVecDiag(ctPool1, conv2Diagonals, hoistingMode, conv2Rotations, 0, &conv2NonZeros);
 
     // Add bias
     ctConv2 = cc->EvalAdd(ctConv2, ptConv2Bias);
@@ -1085,7 +1109,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU2, cc->EvalRotate(ctReLU2, -pool2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, pool2Diagonals, 1, pool2Rotations, 0, &pool2NonZeros);
+    auto ctPool2 = EvalMultMatVecDiag(ctReLU2, pool2Diagonals, hoistingMode, pool2Rotations, 0, &pool2NonZeros);
     double pool2Time = TOC(t);
     std::cout << "  Time: " << pool2Time << " ms" << std::endl;
     std::cout << "  Level: " << ctPool2->GetLevel() << std::endl;
@@ -1109,7 +1133,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctPool2, cc->EvalRotate(ctPool2, -dense1Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctDense1 = EvalMultMatVecDiag(ctPool2, dense1Diagonals, 1, dense1Rotations, 0, &dense1NonZeros);
+    auto ctDense1 = EvalMultMatVecDiag(ctPool2, dense1Diagonals, hoistingMode, dense1Rotations, 0, &dense1NonZeros);
 
     // Add bias
     ctDense1 = cc->EvalAdd(ctDense1, ptDense1Bias);
@@ -1180,7 +1204,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU3, cc->EvalRotate(ctReLU3, -dense2Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, dense2Diagonals, 1, dense2Rotations, 0, &dense2NonZeros);
+    auto ctDense2 = EvalMultMatVecDiag(ctReLU3, dense2Diagonals, hoistingMode, dense2Rotations, 0, &dense2NonZeros);
 
     // Add bias
     ctDense2 = cc->EvalAdd(ctDense2, ptDense2Bias);
@@ -1237,7 +1261,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     TIC(t);
     cc->EvalAddInPlace(ctReLU4, cc->EvalRotate(ctReLU4, -dense3Cols));
     // TESTING: Use raw diagonals directly instead of encoded plaintexts
-    auto ctOutput = EvalMultMatVecDiag(ctReLU4, dense3Diagonals, 1, dense3Rotations, 0, &dense3NonZeros);
+    auto ctOutput = EvalMultMatVecDiag(ctReLU4, dense3Diagonals, hoistingMode, dense3Rotations, 0, &dense3NonZeros);
 
     // Add bias
     ctOutput = cc->EvalAdd(ctOutput, ptDense3Bias);
@@ -1336,16 +1360,21 @@ int main(int argc, char* argv[]) {
     try {
         int sampleIndex = 8;
         ActivationType activationType = ActivationType::SCHEME_SWITCH;
-        bool enableValidation = true;
+        uint32_t chebyDegree = 119;
+        uint32_t chebyMultDepth = 8;
+        bool useOptimized = false;
+        bool enableValidation = false;
 
         // Parse command line arguments
         if (argc > 1) {
             sampleIndex = std::atoi(argv[1]);
             if (sampleIndex < 0 || sampleIndex > 9999) {
                 std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
-                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [validate]" << std::endl;
+                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [cheby_degree] [optimize]" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for non-cheby)" << std::endl;
                 std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
-                std::cerr << "  validate: 1 to enable validation, 0 to disable (default)" << std::endl;
+                std::cerr << "  cheby_degree: Chebyshev degree (3-261631, default: 119, only for 'cheby' activation)" << std::endl;
+                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2), 0 to disable (default)" << std::endl;
                 return 1;
             }
         }
@@ -1366,10 +1395,25 @@ int main(int argc, char* argv[]) {
         }
 
         if (argc > 3) {
-            enableValidation = (std::atoi(argv[3]) != 0);
+            if (activationType == ActivationType::CHEBYSHEV) {
+                // For cheby: argv[3] is degree, argv[4] is optimize
+                chebyDegree = std::atoi(argv[3]);
+                if (chebyDegree < 3 || chebyDegree > 261631) {
+                    std::cerr << "Error: Chebyshev degree must be between 3 and 261631" << std::endl;
+                    return 1;
+                }
+                chebyMultDepth = GetChebyDepthFromDegree(chebyDegree);
+
+                if (argc > 4) {
+                    useOptimized = (std::atoi(argv[4]) != 0);
+                }
+            } else {
+                // For non-cheby: argv[3] is optimize
+                useOptimized = (std::atoi(argv[3]) != 0);
+            }
         }
 
-        MNISTLeNet5Inference(sampleIndex, activationType, enableValidation);
+        MNISTLeNet5Inference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;

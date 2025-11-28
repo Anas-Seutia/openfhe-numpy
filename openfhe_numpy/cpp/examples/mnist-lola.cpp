@@ -43,6 +43,31 @@ enum class ActivationType {
  */
 
 /**
+ * @brief Map Chebyshev polynomial degree to multiplicative depth
+ * Based on: https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/FUNCTION_EVALUATION.md
+ */
+uint32_t GetChebyDepthFromDegree(uint32_t degree) {
+    if (degree >= 3 && degree <= 5) return 4;
+    if (degree >= 6 && degree <= 13) return 5;
+    if (degree >= 14 && degree <= 27) return 6;
+    if (degree >= 28 && degree <= 59) return 7;
+    if (degree >= 60 && degree <= 119) return 8;
+    if (degree >= 120 && degree <= 247) return 9;
+    if (degree >= 248 && degree <= 495) return 10;
+    if (degree >= 496 && degree <= 1007) return 11;
+    if (degree >= 1008 && degree <= 2031) return 12;
+    if (degree >= 2032 && degree <= 4031) return 13;
+    if (degree >= 4032 && degree <= 8127) return 14;
+    if (degree >= 8128 && degree <= 16255) return 15;
+    if (degree >= 16256 && degree <= 32639) return 16;
+    if (degree >= 32640 && degree <= 65279) return 17;
+    if (degree >= 65280 && degree <= 130815) return 18;
+    if (degree >= 130816 && degree <= 261631) return 19;
+
+    throw std::runtime_error("Chebyshev degree out of supported range (3-261631)");
+}
+
+/**
  * @brief Helper function to print min/max bounds of a vector
  */
 void PrintBounds(const std::vector<double>& vec, const std::string& name) {
@@ -376,7 +401,7 @@ Ciphertext<DCRTPoly> EvalActivation(
     }
 }
 
-void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, bool enableValidation = false) {
+void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = false) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -469,9 +494,6 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     // ========== Setup Crypto Context ==========
     std::cout << "\nSetting up crypto context..." << std::endl;
-
-    uint32_t ChebyDegree = 119;
-    uint32_t ChebyMultDepth = 8;
 
     ScalingTechnique scTech = FLEXIBLEAUTO;
     SecretKeyDist secretKeyDist = UNIFORM_TERNARY;
@@ -603,9 +625,12 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     uint32_t convOutputChannels = 5;
     uint32_t flattenedSize = convOutputHeight * convOutputWidth * convOutputChannels;  // 720
 
-    // Multiplexing parameters
+    // Multiplexing parameters (optimized vs unoptimized)
     uint32_t input_gap = 1;
-    uint32_t output_gap = 1;
+    uint32_t output_gap = useOptimized ? (input_gap * convStride) : 1;
+
+    std::cout << "Running in " << (useOptimized ? "optimized" : "unoptimized") << " mode" << std::endl;
+    std::cout << "  Conv: input_gap=" << input_gap << ", output_gap=" << output_gap << std::endl;
 
     uint32_t dense1Output = 64;
     uint32_t dense2Output = 10;
@@ -628,7 +653,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> convDiagonals = PackMatDiagWise(toeplitzConv, batchSize);
     std::size_t convCols = convDiagonals.size();
     std::vector<bool> convNonZeros(convCols);
-    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, &convNonZeros, false);
+    std::vector<int32_t> convRotations = getOptimalRots(convDiagonals, &convNonZeros, useOptimized);
     std::cout << "  Conv Toeplitz: " << toeplitzConv.size() << " rows (multiplexed), "
               << toeplitzConv[0].size() << " cols, "
               << convRotations.size() << " rotation keys needed" << std::endl;
@@ -638,7 +663,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> dense1Diagonals = PackMatDiagWise(dense1, batchSize);
     std::size_t dense1Cols = dense1Diagonals.size();
     std::vector<bool> dense1NonZeros(dense1Cols);
-    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, false);
+    std::vector<int32_t> dense1Rotations = getOptimalRots(dense1Diagonals, &dense1NonZeros, useOptimized);
     std::cout << "  Dense1: " << dense1.size() << " rows, "
               << dense1[0].size() << " cols (multiplexed input), "
               << dense1Rotations.size() << " rotation keys needed" << std::endl;
@@ -647,7 +672,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<std::vector<double>> dense2Diagonals = PackMatDiagWise(dense2Weights, batchSize);
     std::size_t dense2Cols = dense2Diagonals.size();
     std::vector<bool> dense2NonZeros(dense2Cols);
-    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, false);
+    std::vector<int32_t> dense2Rotations = getOptimalRots(dense2Diagonals, &dense2NonZeros, useOptimized);
     std::cout << "  Dense2: " << dense2Cols << " rows, "
               << dense2Rotations.size() << " rotation keys needed" << std::endl;
 
@@ -738,7 +763,8 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
 
     TIC(t);
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctConvOut = EvalMultMatVecDiag(ctInput, convDiagonals, 1, convRotations, 0, &convNonZeros);
+    uint32_t hoistingMode = useOptimized ? 2 : 1;
+    auto ctConvOut = EvalMultMatVecDiag(ctInput, convDiagonals, hoistingMode, convRotations, 0, &convNonZeros);
     ctConvOut = cc->EvalAdd(ctConvOut, ptConvBias);
 
     double convTime = TOC(t);
@@ -793,7 +819,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     cc->EvalAddInPlace(ctAct1, cc->EvalRotate(ctAct1, -dense1Cols));
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, dense1Diagonals, 1, dense1Rotations, 0, &dense1NonZeros);
+    auto ctDense1Out = EvalMultMatVecDiag(ctAct1, dense1Diagonals, hoistingMode, dense1Rotations, 0, &dense1NonZeros);
     ctDense1Out = cc->EvalAdd(ctDense1Out, ptDense1Bias);
 
     double dense1Time = TOC(t);
@@ -849,7 +875,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     TIC(t);
     cc->EvalAddInPlace(ctAct2, cc->EvalRotate(ctAct2, -dense2Cols));
     // TESTING: Pass raw diagonals instead of encoded plaintexts
-    auto ctOutput = EvalMultMatVecDiag(ctAct2, dense2Diagonals, 1, dense2Rotations, 0, &dense2NonZeros);
+    auto ctOutput = EvalMultMatVecDiag(ctAct2, dense2Diagonals, hoistingMode, dense2Rotations, 0, &dense2NonZeros);
     ctOutput = cc->EvalAdd(ctOutput, ptDense2Bias);
 
     double dense2Time = TOC(t);
@@ -944,16 +970,21 @@ int main(int argc, char* argv[]) {
     try {
         int sampleIndex = 8;
         ActivationType activationType = ActivationType::SCHEME_SWITCH;
-        bool enableValidation = true;
+        uint32_t chebyDegree = 119;
+        uint32_t chebyMultDepth = 8;
+        bool useOptimized = false;
+        bool enableValidation = false;
 
         // Parse command line arguments
         if (argc > 1) {
             sampleIndex = std::atoi(argv[1]);
             if (sampleIndex < 0 || sampleIndex > 9999) {
                 std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
-                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [validate]" << std::endl;
+                std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [cheby_degree] [optimize]" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for non-cheby)" << std::endl;
                 std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
-                std::cerr << "  validate: 1 to enable validation, 0 to disable (default)" << std::endl;
+                std::cerr << "  cheby_degree: Chebyshev degree (3-261631, default: 119, only for 'cheby' activation)" << std::endl;
+                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2), 0 to disable (default)" << std::endl;
                 return 1;
             }
         }
@@ -974,10 +1005,25 @@ int main(int argc, char* argv[]) {
         }
 
         if (argc > 3) {
-            enableValidation = (std::atoi(argv[3]) != 0);
+            if (activationType == ActivationType::CHEBYSHEV) {
+                // For cheby: argv[3] is degree, argv[4] is optimize
+                chebyDegree = std::atoi(argv[3]);
+                if (chebyDegree < 3 || chebyDegree > 261631) {
+                    std::cerr << "Error: Chebyshev degree must be between 3 and 261631" << std::endl;
+                    return 1;
+                }
+                chebyMultDepth = GetChebyDepthFromDegree(chebyDegree);
+
+                if (argc > 4) {
+                    useOptimized = (std::atoi(argv[4]) != 0);
+                }
+            } else {
+                // For non-cheby: argv[3] is optimize
+                useOptimized = (std::atoi(argv[3]) != 0);
+            }
         }
 
-        MNISTLoLaInference(sampleIndex, activationType, enableValidation);
+        MNISTLoLaInference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;
