@@ -970,6 +970,17 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         clearDense3 = CleartextDense(clearReLU4, dense3Weights, &trainedWeights.fc3_bias);
         std::cout << "  Cleartext Dense3 (final) output size: " << clearDense3.size() << std::endl;
 
+        // Find cleartext predicted class
+        uint32_t clearPredictedClass = 0;
+        double clearMaxLogit = clearDense3[0];
+        for (uint32_t i = 1; i < clearDense3.size(); i++) {
+            if (clearDense3[i] > clearMaxLogit) {
+                clearMaxLogit = clearDense3[i];
+                clearPredictedClass = i;
+            }
+        }
+        std::cout << "Cleartext predicted class: " << clearPredictedClass << std::endl;
+
         std::cout << "Cleartext reference computation complete!" << std::endl;
     }
 
@@ -1316,8 +1327,31 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         }
     }
 
-    std::cout << "\nPredicted class: " << predictedClass << std::endl;
+    std::cout << "\nPredicted class: " << predictedClass;
+    if (trueLabel >= 0) {
+        std::cout << " (True label: " << trueLabel << ")";
+        if (predictedClass == static_cast<uint32_t>(trueLabel)) {
+            std::cout << " ✓ CORRECT";
+        } else {
+            std::cout << " ✗ INCORRECT";
+        }
+    }
+    std::cout << std::endl;
     std::cout << "Confidence: " << maxLogit << std::endl;
+
+    // Compare final output precision (cleartext vs ciphertext)
+    if (enableValidation && !clearDense3.empty()) {
+        double maxError = 0.0;
+        double sumError = 0.0;
+        for (uint32_t i = 0; i < dense3Output; i++) {
+            double error = std::abs(clearDense3[i] - outputVector[i]);
+            sumError += error;
+            if (error > maxError) maxError = error;
+        }
+        double avgError = sumError / dense3Output;
+        std::cout << "Final output max error: " << std::scientific << std::setprecision(6) << maxError << std::endl;
+        std::cout << "Final output avg error: " << std::scientific << std::setprecision(6) << avgError << std::endl;
+    }
 
     // ========== Performance Summary ==========
     std::cout << "\n" << std::string(80, '=') << std::endl;

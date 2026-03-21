@@ -749,6 +749,17 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
         clearDense2 = CleartextDense(clearAct2, dense2Weights, &dense2Bias);
         std::cout << "  Cleartext Dense2 (final) output size: " << clearDense2.size() << std::endl;
 
+        // Find cleartext predicted class
+        uint32_t clearPredictedClass = 0;
+        double clearMaxLogit = clearDense2[0];
+        for (uint32_t i = 1; i < clearDense2.size(); i++) {
+            if (clearDense2[i] > clearMaxLogit) {
+                clearMaxLogit = clearDense2[i];
+                clearPredictedClass = i;
+            }
+        }
+        std::cout << "Cleartext predicted class: " << clearPredictedClass << std::endl;
+
         std::cout << "Cleartext reference computation complete!" << std::endl;
     }
 
@@ -950,6 +961,20 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     }
     std::cout << std::endl;
     std::cout << "Confidence: " << maxLogit << std::endl;
+
+    // Compare final output precision (cleartext vs ciphertext)
+    if (enableValidation && !clearDense2.empty()) {
+        double maxError = 0.0;
+        double sumError = 0.0;
+        for (uint32_t i = 0; i < dense2Output; i++) {
+            double error = std::abs(clearDense2[i] - outputVector[i]);
+            sumError += error;
+            if (error > maxError) maxError = error;
+        }
+        double avgError = sumError / dense2Output;
+        std::cout << "Final output max error: " << std::scientific << std::setprecision(6) << maxError << std::endl;
+        std::cout << "Final output avg error: " << std::scientific << std::setprecision(6) << avgError << std::endl;
+    }
 
     // ========== Performance Summary ==========
     std::cout << "\n" << std::string(80, '=') << std::endl;
