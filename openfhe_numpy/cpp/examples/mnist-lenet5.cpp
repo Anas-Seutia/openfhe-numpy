@@ -19,6 +19,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <algorithm>
 
 using namespace openfhe_numpy;
 using namespace lbcrypto;
@@ -441,7 +442,7 @@ void CompareVectors(
 
 // ========== CLEARTEXT VALIDATION FUNCTIONS (END) ==========
 
-void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = true) {
+void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = true, BINFHE_PARAMSET slBinParam = TOY) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -528,7 +529,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
     std::vector<uint32_t> levelBudget = {3, 3};
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
-    BINFHE_PARAMSET slBin = STD128;
+    BINFHE_PARAMSET slBin = slBinParam;
     uint32_t logQ_ccLWE = 25;
     uint32_t slots = 8192;
     uint32_t batchSize = slots;
@@ -1279,9 +1280,7 @@ void MNISTLeNet5Inference(int sampleIndex = 8, ActivationType activationType = A
         CompareVectors(clearDense3, encDense3, "Dense3 (Final)", 1e-1);
     }
 
-    double totalInferenceTime = conv1Time + relu1Time + pool1Time + conv2Time + relu2Time +
-                                pool2Time + dense1Time + bootstrap1Time + relu3Time +
-                                bootstrap2Time + dense2Time + bootstrap3Time + relu4Time + dense3Time;
+    double totalInferenceTime = conv1Time + relu1Time + pool1Time + conv2Time + relu2Time + pool2Time + dense1Time + bootstrap1Time + relu3Time + bootstrap2Time + dense2Time + bootstrap3Time + relu4Time + dense3Time;
     double totalBootstrapTime = bootstrap1Time + bootstrap2Time + bootstrap3Time;
     std::cout << "\nTotal inference time: " << totalInferenceTime << " ms";
     if (totalBootstrapTime > 0) {
@@ -1362,8 +1361,9 @@ int main(int argc, char* argv[]) {
         ActivationType activationType = ActivationType::SCHEME_SWITCH;
         uint32_t chebyDegree = 119;
         uint32_t chebyMultDepth = 8;
-        bool useOptimized = false;
+        bool useOptimized = true;
         bool enableValidation = true;
+        BINFHE_PARAMSET slBin = TOY;
 
         // Parse command line arguments
         if (argc > 1) {
@@ -1371,10 +1371,12 @@ int main(int argc, char* argv[]) {
             if (sampleIndex < 0 || sampleIndex > 9999) {
                 std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
                 std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [cheby_degree] [optimize]" << std::endl;
-                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for non-cheby)" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [security_level] [optimize]  (for scheme)" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for square)" << std::endl;
                 std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
+                std::cerr << "  security_level: toy (default), std128 (only for 'scheme' activation)" << std::endl;
                 std::cerr << "  cheby_degree: Chebyshev degree (3-261631, default: 119, only for 'cheby' activation)" << std::endl;
-                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2), 0 to disable (default)" << std::endl;
+                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2) (default), 0 to disable" << std::endl;
                 return 1;
             }
         }
@@ -1407,13 +1409,29 @@ int main(int argc, char* argv[]) {
                 if (argc > 4) {
                     useOptimized = (std::atoi(argv[4]) != 0);
                 }
+            } else if (activationType == ActivationType::SCHEME_SWITCH) {
+                // For scheme: argv[3] is security level (toy/std128), argv[4] is optimize
+                std::string securityStr = argv[3];
+                std::transform(securityStr.begin(), securityStr.end(), securityStr.begin(), ::tolower);
+                if (securityStr == "toy") {
+                    slBin = TOY;
+                } else if (securityStr == "std128") {
+                    slBin = STD128;
+                } else {
+                    std::cerr << "Error: Unknown security level '" << argv[3] << "'" << std::endl;
+                    std::cerr << "Valid options: toy, std128" << std::endl;
+                    return 1;
+                }
+                if (argc > 4) {
+                    useOptimized = (std::atoi(argv[4]) != 0);
+                }
             } else {
-                // For non-cheby: argv[3] is optimize
+                // For non-cheby, non-scheme: argv[3] is optimize
                 useOptimized = (std::atoi(argv[3]) != 0);
             }
         }
 
-        MNISTLeNet5Inference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation);
+        MNISTLeNet5Inference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation, slBin);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;

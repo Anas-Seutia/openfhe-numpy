@@ -19,6 +19,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <algorithm>
 
 using namespace openfhe_numpy;
 using namespace lbcrypto;
@@ -352,12 +353,12 @@ Ciphertext<DCRTPoly> EvalReLUSchemeSwitching(
     Plaintext ptxtZero = cc->MakeCKKSPackedPlaintext(zeros, 1, 0, nullptr, totalSlots);
     auto ctZero = cc->Encrypt(publicKey, ptxtZero);
 
-    // ReLU(x) = x * (x > 0)
-    // Step 1: Compute comparison result (x > 0)
-    auto ctComparison = cc->EvalCompareSchemeSwitching(ct, ctZero, NextPow2(numSlots), totalSlots, 0, scaleSign);
+    // ReLU(x) = -(x < 0) + 1
+    // Step 1: Compute comparison result (x < 0)
+    auto ctComparison = cc->EvalCompareSchemeSwitching(ct, ctZero, NextPow2(numSlots), NextPow2(numSlots), 0, scaleSign);
 
     // Step 2: Multiply input by comparison result to get ReLU
-    // The comparison returns 1 if x < 0, 0 otherwise
+    // The comparison returns 1 if x > 0, 0 otherwise
     // We need to invert: (1 - comparison) to get mask
     auto ctReLU = cc->EvalMult(ct, cc->EvalSub(1, ctComparison));
 
@@ -401,7 +402,7 @@ Ciphertext<DCRTPoly> EvalActivation(
     }
 }
 
-void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = true) {
+void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = ActivationType::SCHEME_SWITCH, uint32_t ChebyDegree = 119, uint32_t ChebyMultDepth = 8, bool useOptimized = false, bool enableValidation = true, BINFHE_PARAMSET slBinParam = TOY) {
     std::cout << "\n" << std::string(80, '=') << std::endl;
 
     // Print activation type
@@ -504,7 +505,7 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     std::vector<uint32_t> levelBudget = {3, 3};
     std::vector<uint32_t> bsgsDim = {0, 0};
     SecurityLevel sl = HEStd_NotSet;
-    BINFHE_PARAMSET slBin = STD128;
+    BINFHE_PARAMSET slBin = slBinParam;
     uint32_t logQ_ccLWE = 25;
     uint32_t slots = 4096;
     uint32_t batchSize = slots;
@@ -579,12 +580,19 @@ void MNISTLoLaInference(int sampleIndex = 8, ActivationType activationType = Act
     // Setup scheme switching parameters if needed
     double scaleSignFHEW = 1.0;
     if (activationType == ActivationType::SCHEME_SWITCH) {
+        // Pre-compute the padded numValues for scheme switching setup.
+        // multiplexedFlattenedSize = ceil(C / g^2) * (H*g) * (W*g)
+        // where g = output_gap, C=5 conv channels, H=W=12 conv output spatial size.
+        uint32_t ss_g = useOptimized ? 2u : 1u;
+        uint32_t ss_flat = ((5u + ss_g*ss_g - 1u) / (ss_g*ss_g)) * (12u * ss_g) * (12u * ss_g);
+        uint32_t ssNumValues = NextPow2(ss_flat);
+
         SchSwchParams params;
-        params.SetSecurityLevelCKKS(sl);
+        params.SetSecurityLevelCKKS(HEStd_128_classic);
         params.SetSecurityLevelFHEW(slBin);
         params.SetCtxtModSizeFHEWLargePrec(logQ_ccLWE);
         params.SetNumSlotsCKKS(slots);
-        params.SetNumValues(720);
+        params.SetNumValues(ssNumValues);
 
         auto privateKeyFHEW = cc->EvalSchemeSwitchingSetup(params);
         auto ccLWE = cc->GetBinCCForSchemeSwitch();
@@ -976,8 +984,9 @@ int main(int argc, char* argv[]) {
         ActivationType activationType = ActivationType::SCHEME_SWITCH;
         uint32_t chebyDegree = 119;
         uint32_t chebyMultDepth = 8;
-        bool useOptimized = false;
+        bool useOptimized = true;
         bool enableValidation = true;
+        BINFHE_PARAMSET slBin = TOY;
 
         // Parse command line arguments
         if (argc > 1) {
@@ -985,10 +994,12 @@ int main(int argc, char* argv[]) {
             if (sampleIndex < 0 || sampleIndex > 9999) {
                 std::cerr << "Error: Sample index must be between 0 and 9999" << std::endl;
                 std::cerr << "Usage: " << argv[0] << " [sample_index] [activation_type] [cheby_degree] [optimize]" << std::endl;
-                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for non-cheby)" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [security_level] [optimize]  (for scheme)" << std::endl;
+                std::cerr << "  or:    " << argv[0] << " [sample_index] [activation_type] [optimize]  (for square)" << std::endl;
                 std::cerr << "  activation_type: scheme (default), cheby, square" << std::endl;
+                std::cerr << "  security_level: toy (default), std128 (only for 'scheme' activation)" << std::endl;
                 std::cerr << "  cheby_degree: Chebyshev degree (3-261631, default: 119, only for 'cheby' activation)" << std::endl;
-                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2), 0 to disable (default)" << std::endl;
+                std::cerr << "  optimize: 1 to enable optimization (output_gap, hoisting mode 2) (default), 0 to disable" << std::endl;
                 return 1;
             }
         }
@@ -1021,13 +1032,29 @@ int main(int argc, char* argv[]) {
                 if (argc > 4) {
                     useOptimized = (std::atoi(argv[4]) != 0);
                 }
+            } else if (activationType == ActivationType::SCHEME_SWITCH) {
+                // For scheme: argv[3] is security level (toy/std128), argv[4] is optimize
+                std::string securityStr = argv[3];
+                std::transform(securityStr.begin(), securityStr.end(), securityStr.begin(), ::tolower);
+                if (securityStr == "toy") {
+                    slBin = TOY;
+                } else if (securityStr == "std128") {
+                    slBin = STD128;
+                } else {
+                    std::cerr << "Error: Unknown security level '" << argv[3] << "'" << std::endl;
+                    std::cerr << "Valid options: toy, std128" << std::endl;
+                    return 1;
+                }
+                if (argc > 4) {
+                    useOptimized = (std::atoi(argv[4]) != 0);
+                }
             } else {
-                // For non-cheby: argv[3] is optimize
+                // For non-cheby, non-scheme: argv[3] is optimize
                 useOptimized = (std::atoi(argv[3]) != 0);
             }
         }
 
-        MNISTLoLaInference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation);
+        MNISTLoLaInference(sampleIndex, activationType, chebyDegree, chebyMultDepth, useOptimized, enableValidation, slBin);
     }
     catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;
