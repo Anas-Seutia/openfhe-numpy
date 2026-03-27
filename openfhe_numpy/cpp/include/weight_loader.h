@@ -347,6 +347,140 @@ inline LoLaWeights LoadLoLaWeights(const std::string& weightsDir) {
 }
 
 /**
+ * @brief Load CIFAR-10 image from binary file (3x32x32, CHW, normalized, float64)
+ */
+inline std::vector<std::vector<std::vector<double>>> LoadCIFAR10Image(const std::string& imagePath) {
+    std::ifstream binFile(imagePath, std::ios::binary);
+    if (!binFile.is_open()) {
+        throw std::runtime_error("Failed to open CIFAR-10 image file: " + imagePath);
+    }
+
+    const size_t channels = 3, height = 32, width = 32;
+    const size_t totalSize = channels * height * width;
+
+    std::vector<double> flat_image(totalSize);
+    binFile.read(reinterpret_cast<char*>(flat_image.data()), totalSize * sizeof(double));
+    binFile.close();
+
+    // Convert to 3D [C, H, W]
+    std::vector<std::vector<std::vector<double>>> image(channels,
+        std::vector<std::vector<double>>(height, std::vector<double>(width)));
+    for (size_t c = 0; c < channels; c++) {
+        for (size_t h = 0; h < height; h++) {
+            for (size_t w = 0; w < width; w++) {
+                image[c][h][w] = flat_image[c * height * width + h * width + w];
+            }
+        }
+    }
+
+    return image;
+}
+
+/**
+ * @brief ResNet-20 weights (no BatchNorm)
+ *
+ * Architecture: conv1 -> [layer1 x3] -> [layer2 x3] -> [layer3 x3] -> avgpool -> fc
+ * Each block: conv1->relu->conv2 + shortcut -> relu
+ */
+struct ResNet20BlockWeights {
+    std::vector<std::vector<std::vector<std::vector<double>>>> conv1_weight;
+    std::vector<double> conv1_bias;
+    std::vector<std::vector<std::vector<std::vector<double>>>> conv2_weight;
+    std::vector<double> conv2_bias;
+
+    bool has_shortcut = false;
+    std::vector<std::vector<std::vector<std::vector<double>>>> shortcut_weight;
+    std::vector<double> shortcut_bias;
+};
+
+struct ResNet20Weights {
+    // Initial conv
+    std::vector<std::vector<std::vector<std::vector<double>>>> conv1_weight;
+    std::vector<double> conv1_bias;
+
+    // 3 layers x 3 blocks each = 9 blocks
+    ResNet20BlockWeights layer1[3];
+    ResNet20BlockWeights layer2[3];
+    ResNet20BlockWeights layer3[3];
+
+    // FC layer
+    std::vector<std::vector<double>> fc_weight;
+    std::vector<double> fc_bias;
+};
+
+inline ResNet20BlockWeights LoadResNet20Block(const std::string& weightsDir,
+                                               const std::string& prefix,
+                                               bool expectShortcut) {
+    ResNet20BlockWeights block;
+
+    block.conv1_weight = Load4DWeights(
+        weightsDir + "/" + prefix + ".conv1.weight.bin",
+        weightsDir + "/" + prefix + ".conv1.weight.shape");
+    block.conv1_bias = Load1DWeights(
+        weightsDir + "/" + prefix + ".conv1.bias.bin",
+        weightsDir + "/" + prefix + ".conv1.bias.shape");
+
+    block.conv2_weight = Load4DWeights(
+        weightsDir + "/" + prefix + ".conv2.weight.bin",
+        weightsDir + "/" + prefix + ".conv2.weight.shape");
+    block.conv2_bias = Load1DWeights(
+        weightsDir + "/" + prefix + ".conv2.bias.bin",
+        weightsDir + "/" + prefix + ".conv2.bias.shape");
+
+    block.has_shortcut = expectShortcut;
+    if (expectShortcut) {
+        block.shortcut_weight = Load4DWeights(
+            weightsDir + "/" + prefix + ".shortcut.weight.bin",
+            weightsDir + "/" + prefix + ".shortcut.weight.shape");
+        block.shortcut_bias = Load1DWeights(
+            weightsDir + "/" + prefix + ".shortcut.bias.bin",
+            weightsDir + "/" + prefix + ".shortcut.bias.shape");
+    }
+
+    return block;
+}
+
+inline ResNet20Weights LoadResNet20Weights(const std::string& weightsDir) {
+    ResNet20Weights w;
+
+    // Initial conv
+    w.conv1_weight = Load4DWeights(
+        weightsDir + "/conv1.weight.bin",
+        weightsDir + "/conv1.weight.shape");
+    w.conv1_bias = Load1DWeights(
+        weightsDir + "/conv1.bias.bin",
+        weightsDir + "/conv1.bias.shape");
+
+    // Layer 1: 3 blocks, all 16->16, no shortcut
+    for (int i = 0; i < 3; i++) {
+        std::string prefix = "layer1." + std::to_string(i);
+        w.layer1[i] = LoadResNet20Block(weightsDir, prefix, false);
+    }
+
+    // Layer 2: block 0 has shortcut (16->32, stride=2), blocks 1-2 no shortcut
+    for (int i = 0; i < 3; i++) {
+        std::string prefix = "layer2." + std::to_string(i);
+        w.layer2[i] = LoadResNet20Block(weightsDir, prefix, i == 0);
+    }
+
+    // Layer 3: block 0 has shortcut (32->64, stride=2), blocks 1-2 no shortcut
+    for (int i = 0; i < 3; i++) {
+        std::string prefix = "layer3." + std::to_string(i);
+        w.layer3[i] = LoadResNet20Block(weightsDir, prefix, i == 0);
+    }
+
+    // FC layer
+    w.fc_weight = Load2DWeights(
+        weightsDir + "/fc.weight.bin",
+        weightsDir + "/fc.weight.shape");
+    w.fc_bias = Load1DWeights(
+        weightsDir + "/fc.bias.bin",
+        weightsDir + "/fc.bias.shape");
+
+    return w;
+}
+
+/**
  * @brief Extract label from MNIST filename
  * Format: mnist_X_label_Y.bin -> returns Y
  */
