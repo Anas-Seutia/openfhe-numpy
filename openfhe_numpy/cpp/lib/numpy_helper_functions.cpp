@@ -140,18 +140,20 @@ template <typename Element>
 std::vector<Element> EncodeMatrix(const std::vector<std::vector<Element>>& mat, long total_slots) {
     uint32_t n = mat.size();
     uint32_t m = mat[0].size();
+    uint32_t size = n * m;
 
-    uint32_t size   = n * m;
-    uint32_t blocks = total_slots / size;
+    // Flatten matrix once
+    std::vector<Element> flat;
+    flat.reserve(size);
+    for (uint32_t i = 0; i < n; ++i)
+        for (uint32_t j = 0; j < m; ++j)
+            flat.push_back(mat[i][j]);
 
-    std::vector<Element> vec;
-    vec.reserve(total_slots);
-    for (uint32_t t = 0; t < blocks; ++t) {
-        for (uint32_t i = 0; i < n; ++i) {
-            for (uint32_t j = 0; j < m; ++j)
-                vec.push_back(mat[i][j]);
-        }
-    }
+    // Replicate to fill ALL slots (modular wrap for the partial tail)
+    std::vector<Element> vec(total_slots);
+    for (long k = 0; k < total_slots; ++k)
+        vec[k] = flat[k % size];
+
     return vec;
 }
 template std::vector<double> EncodeMatrix(const std::vector<std::vector<double>>& mat, long total_slots);

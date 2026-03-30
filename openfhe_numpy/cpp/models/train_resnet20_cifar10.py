@@ -274,8 +274,9 @@ def export_weights(model_path, output_dir):
 
 # ==================== Test Image Export ====================
 
-def export_test_images(num_images=10, data_dir='./data', output_dir=None):
-    """Export normalized CIFAR-10 test images as .bin files for C++ inference."""
+def export_test_images(data_dir='./data', output_dir=None):
+    """Export one CIFAR-10 test image per class (10 total) as .bin files for C++ inference.
+    Files are named cifar10_class_{label}.bin so the first argument selects by class."""
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'cifar10')
     os.makedirs(output_dir, exist_ok=True)
@@ -292,29 +293,25 @@ def export_test_images(num_images=10, data_dir='./data', output_dir=None):
     classes = ('plane', 'car', 'bird', 'cat', 'deer',
                'dog', 'frog', 'horse', 'ship', 'truck')
 
-    print(f"\nExporting {num_images} CIFAR-10 test images to {output_dir}/")
+    print(f"\nExporting one CIFAR-10 test image per class to {output_dir}/")
 
-    for i in range(min(num_images, len(testset))):
+    found = set()
+    for i in range(len(testset)):
+        if len(found) == 10:
+            break
         img, label = testset[i]
-        # img shape: [3, 32, 32], already normalized
+        if label in found:
+            continue
+        found.add(label)
+
         data = img.numpy().astype(np.float64)  # CHW format
 
-        filename = f"cifar10_{i}_label_{label}.bin"
+        filename = f"cifar10_class_{label}.bin"
         filepath = os.path.join(output_dir, filename)
         with open(filepath, 'wb') as f:
             f.write(data.tobytes())
 
-        # Also save as text for debugging
-        txt_filename = f"cifar10_{i}_label_{label}.txt"
-        txt_filepath = os.path.join(output_dir, txt_filename)
-        with open(txt_filepath, 'w') as f:
-            flat = data.flatten()
-            for j, val in enumerate(flat):
-                f.write(f"{val:.6f}")
-                if j < len(flat) - 1:
-                    f.write(' ')
-
-        print(f"  Sample {i}: label={label} ({classes[label]}), "
+        print(f"  Class {label} ({classes[label]}): test index={i}, "
               f"shape={list(data.shape)}, "
               f"range=[{data.min():.3f}, {data.max():.3f}]")
 

@@ -421,27 +421,22 @@ void CIFAR10ResNet20Inference(
     std::cout << std::string(80, '=') << "\n" << std::endl;
 
     // ========== Load CIFAR-10 Input ==========
+    // First argument selects class (0-9): plane,car,bird,cat,deer,dog,frog,horse,ship,truck
     std::string cifarDataDir = "../openfhe_numpy/cpp/data/cifar10";
-    std::string actualFile = "";
-    int trueLabel = -1;
-
-    for (int label = 0; label < 10; label++) {
-        std::stringstream testPath;
-        testPath << cifarDataDir << "/cifar10_" << sampleIndex << "_label_" << label << ".bin";
-        std::ifstream testFile(testPath.str());
-        if (testFile.good()) {
-            actualFile = testPath.str();
-            trueLabel = label;
-            break;
-        }
-    }
-    if (actualFile.empty()) {
-        throw std::runtime_error("Could not find CIFAR-10 sample #" + std::to_string(sampleIndex) +
+    int trueLabel = sampleIndex;  // argument is the class label
+    std::stringstream filePath;
+    filePath << cifarDataDir << "/cifar10_class_" << trueLabel << ".bin";
+    std::ifstream testFile(filePath.str());
+    if (!testFile.good()) {
+        throw std::runtime_error("Could not find CIFAR-10 class " + std::to_string(trueLabel) +
+                                 " at " + filePath.str() +
                                  ". Run train_resnet20_cifar10.py first!");
     }
 
-    auto cifarInput3D = LoadCIFAR10Image(actualFile);
-    std::cout << "Loaded sample #" << sampleIndex << ", true label: " << trueLabel << std::endl;
+    const char* classNames[] = {"plane", "car", "bird", "cat", "deer",
+                                 "dog", "frog", "horse", "ship", "truck"};
+    auto cifarInput3D = LoadCIFAR10Image(filePath.str());
+    std::cout << "Loaded class " << trueLabel << " (" << classNames[trueLabel] << ")" << std::endl;
 
     // ========== Network Dimensions ==========
     // Layer sizes: (channels, height, width, flat_size)
@@ -840,10 +835,16 @@ void CIFAR10ResNet20Inference(
     // ----- Initial ReLU -----
     std::cout << "\n[InitReLU] (" << activationName << ")..." << std::endl;
     TIC(t);
-    double initLower = -10.0, initUpper = 10.0;
+    double chebyMargin = 12.0;
+    double initLower = -20.0, initUpper = 20.0;
     if (enableValidation && !clearInitConv.empty()) {
-        initLower = std::floor(*std::min_element(clearInitConv.begin(), clearInitConv.end()));
-        initUpper = std::ceil(*std::max_element(clearInitConv.begin(), clearInitConv.end()));
+        double rawMin = *std::min_element(clearInitConv.begin(), clearInitConv.end());
+        double rawMax = *std::max_element(clearInitConv.begin(), clearInitConv.end());
+        initLower = rawMin - chebyMargin;
+        initUpper = rawMax + chebyMargin;
+        std::cout << "  Chebyshev bounds: [" << std::fixed << std::setprecision(2)
+                  << initLower << ", " << initUpper << "] (cleartext [" << rawMin
+                  << ", " << rawMax << "], margin=" << chebyMargin << ")" << std::endl;
     }
     ctCurrent = EvalActivation(cc, ctCurrent, activationType, ctZero,
                                 conv1FlatSize, slots, scaleSignFHEW,
@@ -896,12 +897,16 @@ void CIFAR10ResNet20Inference(
 
         // --- ReLU1 ---
         TIC(t);
-        double lower1 = -10.0, upper1 = 10.0;
+        double lower1 = -20.0, upper1 = 20.0;
         if (enableValidation && !clearBlocks[b].afterConv1.empty()) {
-            lower1 = std::floor(*std::min_element(clearBlocks[b].afterConv1.begin(),
-                                                   clearBlocks[b].afterConv1.end()));
-            upper1 = std::ceil(*std::max_element(clearBlocks[b].afterConv1.begin(),
-                                                  clearBlocks[b].afterConv1.end()));
+            double rawMin1 = *std::min_element(clearBlocks[b].afterConv1.begin(),
+                                                clearBlocks[b].afterConv1.end());
+            double rawMax1 = *std::max_element(clearBlocks[b].afterConv1.begin(),
+                                                clearBlocks[b].afterConv1.end());
+            lower1 = rawMin1 - chebyMargin;
+            upper1 = rawMax1 + chebyMargin;
+            std::cout << "  ReLU1 bounds: [" << std::fixed << std::setprecision(2)
+                      << lower1 << ", " << upper1 << "]";
         }
         ctCurrent = EvalActivation(cc, ctCurrent, activationType, ctZero,
                                     blk.midFlatSize, slots, scaleSignFHEW,
@@ -970,12 +975,16 @@ void CIFAR10ResNet20Inference(
 
         // --- ReLU2 (post-add) ---
         TIC(t);
-        double lower2 = -10.0, upper2 = 10.0;
+        double lower2 = -20.0, upper2 = 20.0;
         if (enableValidation && !clearBlocks[b].afterAdd.empty()) {
-            lower2 = std::floor(*std::min_element(clearBlocks[b].afterAdd.begin(),
-                                                   clearBlocks[b].afterAdd.end()));
-            upper2 = std::ceil(*std::max_element(clearBlocks[b].afterAdd.begin(),
-                                                  clearBlocks[b].afterAdd.end()));
+            double rawMin2 = *std::min_element(clearBlocks[b].afterAdd.begin(),
+                                                clearBlocks[b].afterAdd.end());
+            double rawMax2 = *std::max_element(clearBlocks[b].afterAdd.begin(),
+                                                clearBlocks[b].afterAdd.end());
+            lower2 = rawMin2 - chebyMargin;
+            upper2 = rawMax2 + chebyMargin;
+            std::cout << "  ReLU2 bounds: [" << std::fixed << std::setprecision(2)
+                      << lower2 << ", " << upper2 << "]";
         }
         ctCurrent = EvalActivation(cc, ctCurrent, activationType, ctZero,
                                     blk.outputFlatSize, slots, scaleSignFHEW,
@@ -1047,8 +1056,6 @@ void CIFAR10ResNet20Inference(
     std::cout << "Decryption time: " << TOC(t) << " ms" << std::endl;
 
     std::cout << "\nOutput logits:" << std::endl;
-    const char* classNames[] = {"plane", "car", "bird", "cat", "deer",
-                                 "dog", "frog", "horse", "ship", "truck"};
     for (uint32_t i = 0; i < 10; i++) {
         std::cout << "  " << std::setw(6) << classNames[i] << ": "
                   << std::fixed << std::setprecision(4) << outputVector[i] << std::endl;
